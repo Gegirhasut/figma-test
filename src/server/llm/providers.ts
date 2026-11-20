@@ -20,7 +20,8 @@ export interface Provider {
   name: ProviderName;
   model: string;
   configured(): boolean;
-  interpret(phrase: string): Promise<ProviderResult>;
+  /** `signal` aborts the call when the interpreter's overall deadline runs out. */
+  interpret(phrase: string, signal?: AbortSignal): Promise<ProviderResult>;
 }
 
 export interface ProviderEnv {
@@ -29,6 +30,7 @@ export interface ProviderEnv {
   DEEPSEEK_API_KEY?: string;
   DEEPSEEK_MODEL?: string;
   DEEPSEEK_BASE_URL?: string;
+  /** Cap for a single provider call. */
   LLM_TIMEOUT_MS?: string;
   /** USD per 1M tokens, input/output. */
   ANTHROPIC_PRICE_IN?: string;
@@ -47,8 +49,10 @@ export function anthropicProvider(env: ProviderEnv): Provider {
     name: 'anthropic',
     model,
     configured: () => Boolean(env.ANTHROPIC_API_KEY),
-    async interpret(phrase) {
-      client ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout, maxRetries: 1 });
+    async interpret(phrase, signal) {
+      // No retries: the interpreter has one deadline for the whole chain and
+      // moves on to the fallback provider instead.
+      client ??= new Anthropic({ apiKey: env.ANTHROPIC_API_KEY, timeout, maxRetries: 0 });
       const t0 = Date.now();
       const response = await client.messages.create({
         model,
@@ -61,7 +65,7 @@ export function anthropicProvider(env: ProviderEnv): Provider {
         },
         system: SYSTEM_PROMPT,
         messages: [{ role: 'user', content: userPrompt(phrase) }],
-      });
+      }, { signal });
       const latencyMs = Date.now() - t0;
       if (response.stop_reason === 'refusal') throw new Error('anthropic: refusal');
       const text = response.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
@@ -95,7 +99,7 @@ export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fet
     name: 'deepseek',
     model,
     configured: () => Boolean(env.DEEPSEEK_API_KEY),
-    async interpret(phrase) {
+    async interpret(phrase, signal) {
       const t0 = Date.now();
       const res = await fetchImpl(`${base}/chat/completions`, {
         method: 'POST',
@@ -111,7 +115,7 @@ export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fet
           max_tokens: 200,
           stream: false,
         }),
-        signal: AbortSignal.timeout(timeout),
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
       });
       if (!res.ok) throw new Error(`deepseek: HTTP ${res.status}`);
       const data = (await res.json()) as DeepSeekResponse;

@@ -5,12 +5,12 @@
 //   npm run build && npm start  — production
 
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { join, resolve } from 'node:path';
 import { Interpreter, RateLimiter } from './interpret';
 import { providerChain } from './llm/providers';
+import { serveStatic } from './static';
 
 const ROOT = process.cwd();
 if (existsSync(join(ROOT, '.env'))) process.loadEnvFile(join(ROOT, '.env'));
@@ -22,10 +22,12 @@ const PORT = Number(env.PORT) || 5173;
 const HOST = env.HOST || '127.0.0.1';
 const COOKIE = 'skl_id';
 
+// Built once: the providers (and the Anthropic client inside) are reused by every request.
+const providers = providerChain(env);
 const interpreter = new Interpreter(
-  () => providerChain(env),
+  providers,
   { perBrowser: Number(env.AI_LIMIT_PER_BROWSER) || 3, perIp: Number(env.AI_LIMIT_PER_IP) || 10 },
-  (m) => console.log(m),
+  { deadlineMs: Number(env.LLM_DEADLINE_MS) || 12000, log: (m) => console.log(m) },
 );
 const limiter = new RateLimiter(Number(env.RATE_LIMIT_PER_MINUTE) || 30);
 
@@ -72,7 +74,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
   }
   const id = browserId(req, res);
   if (path === '/api/status' && req.method === 'GET') {
-    sendJson(res, 200, { aiLeft: interpreter.aiLeft(id, ip), aiConfigured: providerChain(env).length > 0 });
+    sendJson(res, 200, { ...interpreter.quota(id, ip), aiConfigured: interpreter.aiConfigured });
     return true;
   }
   if (path === '/api/interpret' && req.method === 'POST') {
@@ -93,49 +95,6 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, path: string
   }
   sendJson(res, 404, { error: 'Not found' });
   return true;
-}
-
-const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.txt': 'text/plain; charset=utf-8',
-};
-
-const gzCache = new Map<string, Buffer>();
-
-function serveStatic(dist: string, path: string, req: IncomingMessage, res: ServerResponse) {
-  const safe = normalize(decodeURIComponent(path)).replace(/^([/\\])+/, '');
-  let file = resolve(dist, safe);
-  if (!file.startsWith(dist + sep) && file !== dist) {
-    res.writeHead(403).end();
-    return;
-  }
-  if (!existsSync(file) || statSync(file).isDirectory()) file = join(dist, 'index.html');
-  const ext = extname(file);
-  const immutable = file.includes(`${sep}assets${sep}`);
-  const headers: Record<string, string> = {
-    'content-type': MIME[ext] ?? 'application/octet-stream',
-    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-    vary: 'accept-encoding',
-  };
-  let body: Buffer = readFileSync(file);
-  if (/gzip/.test(String(req.headers['accept-encoding'] ?? '')) && ['.html', '.js', '.css', '.json', '.svg'].includes(ext)) {
-    let gz = gzCache.get(file);
-    if (!gz) {
-      gz = gzipSync(body);
-      gzCache.set(file, gz);
-    }
-    body = gz;
-    headers['content-encoding'] = 'gzip';
-  }
-  res.writeHead(200, headers);
-  res.end(body);
 }
 
 async function main() {
@@ -161,7 +120,7 @@ async function main() {
     }
   });
   server.listen(PORT, HOST, () => {
-    const ai = providerChain(env).map((p) => `${p.name}:${p.model}`).join(' → ') || 'нет ключей, только словарь';
+    const ai = providers.map((p) => `${p.name}:${p.model}`).join(' → ') || 'нет ключей, только словарь';
     console.log(`Складно: http://localhost:${PORT} (${isProd ? 'production' : 'development'}; AI: ${ai})`);
   });
 }

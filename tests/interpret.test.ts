@@ -40,7 +40,7 @@ describe('interpreter', () => {
   it('uses the primary provider and caches identical phrases', async () => {
     const a = fake('anthropic', ok(['wallet', 'coin']));
     const d = fake('deepseek', ok(['book']));
-    const it = new Interpreter(() => [a, d], { perBrowser: 3, perIp: 10 });
+    const it = new Interpreter([a, d], { perBrowser: 3, perIp: 10 });
     const r1 = await it.interpret('Копим на отпуск', 'b1', 'ip');
     const r2 = await it.interpret('копим  на отпуск!', 'b2', 'ip2');
     expect(r1.source).toBe('anthropic');
@@ -55,13 +55,13 @@ describe('interpreter', () => {
       throw new Error('down');
     });
     const d = fake('deepseek', ok(['lamp']));
-    const it1 = new Interpreter(() => [a, d], { perBrowser: 3, perIp: 10 });
+    const it1 = new Interpreter([a, d], { perBrowser: 3, perIp: 10 });
     expect((await it1.interpret('идея', 'b', 'ip')).source).toBe('deepseek');
 
     const bad = fake('deepseek', async () => {
       throw new Error('down');
     });
-    const it2 = new Interpreter(() => [a, bad], { perBrowser: 3, perIp: 10 });
+    const it2 = new Interpreter([a, bad], { perBrowser: 3, perIp: 10 });
     const r = await it2.interpret('копим на отпуск', 'b', 'ip');
     expect(r.source).toBe('dictionary');
     expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
@@ -69,7 +69,7 @@ describe('interpreter', () => {
 
   it('an explicit «на фоне» in the phrase wins over the roles from the LLM, also from the cache', async () => {
     const a = fake('anthropic', ok(['book', 'phone']));
-    const it = new Interpreter(() => [a], { perBrowser: 3, perIp: 10 });
+    const it = new Interpreter([a], { perBrowser: 3, perIp: 10 });
     const r = await it.interpret('звонки: книга на фоне, телефон', 'b', 'ip');
     expect(r.objects).toEqual([
       { id: 'book', role: 'background' },
@@ -86,7 +86,7 @@ describe('interpreter', () => {
   });
 
   it('without keys answers from the dictionary and does not spend the quota', async () => {
-    const it = new Interpreter(() => [], { perBrowser: 3, perIp: 10 });
+    const it = new Interpreter([], { perBrowser: 3, perIp: 10 });
     const r = await it.interpret('новая идея', 'b', 'ip');
     expect(r.source).toBe('dictionary');
     expect(r.aiUnavailable).toBe(true);
@@ -95,7 +95,7 @@ describe('interpreter', () => {
 
   it('limits AI requests per browser and per IP', async () => {
     const a = fake('anthropic', ok(['coin']));
-    const it = new Interpreter(() => [a], { perBrowser: 3, perIp: 5 });
+    const it = new Interpreter([a], { perBrowser: 3, perIp: 5 });
     for (const p of ['раз', 'два', 'три']) expect((await it.interpret(p, 'b1', 'ip1')).source).toBe('anthropic');
     const limited = await it.interpret('четыре', 'b1', 'ip1');
     expect(limited.limited).toBe(true);
