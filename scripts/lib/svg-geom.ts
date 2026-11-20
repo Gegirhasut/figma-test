@@ -265,3 +265,25 @@ export function simplifyHull(hull: Pt[], max: number): Pt[] {
   }
   return h;
 }
+
+/** Approximate filled area of path data: sum of signed subpath areas (rings cancel out their holes). */
+export function pathArea(d: string): number {
+  const subpaths = d.split(/(?=[Mm])/).filter((s) => s.trim());
+  let total = 0;
+  let x0 = 0;
+  let y0 = 0;
+  for (const sp of subpaths) {
+    // Relative moveto would need the previous end point; Figma exports absolute commands.
+    const pts = pathPoints(sp.startsWith('m') ? `M${x0} ${y0}` + sp.slice(1) : sp, 6);
+    if (pts.length < 3) continue;
+    let a = 0;
+    for (let i = 0; i < pts.length; i++) {
+      const j = (i + 1) % pts.length;
+      a += pts[i].x * pts[j].y - pts[j].x * pts[i].y;
+    }
+    total += a / 2;
+    x0 = pts[pts.length - 1].x;
+    y0 = pts[pts.length - 1].y;
+  }
+  return Math.abs(total);
+}

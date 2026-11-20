@@ -28,7 +28,9 @@ import {
   type Size,
   type Variant,
 } from '../src/shared/types';
-import { colorsUsed, footprint, innerMarkup, nodeBox, nodesBox, readSection, tokenizeMarkup, type SourceSection } from './lib/library-source';
+import { colorsUsed, footprint, innerMarkup, nodeBox, nodesBox, normColor, readSection, tokenizeMarkup, type SourceSection } from './lib/library-source';
+import { pathArea } from './lib/svg-geom';
+import { walk } from './lib/xml';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SOURCES: Record<Size, string> = {
@@ -67,6 +69,20 @@ function makeFragment(sec: SourceSection, nodes: import('./lib/xml').XNode[], co
   const hull = footprint(nodes).map((p) => ({ x: round(p.x - box.minX, 1), y: round(p.y - box.minY, 1) }));
   const { markup, roles } = tokenizeMarkup(raw, colorToRole);
   void sec;
+  const share: Partial<Record<Role, number>> = {};
+  let total = 0;
+  for (const n of nodes.flatMap((x) => [x, ...walk(x)])) {
+    const fill = n.attrs.fill;
+    if (!fill || fill === 'none' || fill.startsWith('url(')) continue;
+    const role = colorToRole.get(normColor(fill));
+    if (!role) continue;
+    let a = 0;
+    if (n.tag === 'path') a = pathArea(n.attrs.d);
+    else if (n.tag === 'rect') a = parseFloat(n.attrs.width) * parseFloat(n.attrs.height);
+    share[role] = (share[role] ?? 0) + a;
+    total += a;
+  }
+  const roleShare = Object.fromEntries(Object.entries(share).map(([r, a]) => [r, round(a / (total || 1))])) as Partial<Record<Role, number>>;
   return {
     markup,
     x: round(box.minX),
@@ -75,6 +91,7 @@ function makeFragment(sec: SourceSection, nodes: import('./lib/xml').XNode[], co
     h: round(box.maxY - box.minY),
     hull,
     roles: ROLES.filter((r) => roles.includes(r)),
+    roleShare,
   };
 }
 

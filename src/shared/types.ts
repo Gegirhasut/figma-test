@@ -39,6 +39,8 @@ export interface Fragment {
   hull: Pt[];
   /** Roles used by the markup. */
   roles: Role[];
+  /** Approximate share of the painted area per fill role. */
+  roleShare: Partial<Record<Role, number>>;
 }
 
 export type Corner = 'tl' | 'tr' | 'bl' | 'br';
