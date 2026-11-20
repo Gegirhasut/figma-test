@@ -27,22 +27,10 @@ interface Example {
 }
 
 const EXAMPLES: Example[] = [
-  { file: '01-koshelek-moneta-horizontal-lilac-L.svg', phrase: 'кошелёк, монета', format: 'horizontal', size: 'L', scheme: 'lilac' },
-  {
-    file: '02-kopim-na-otpusk-square-peach-L.svg',
-    phrase: 'копим на отпуск',
-    format: 'square',
-    size: 'L',
-    scheme: 'peach',
-    variant: 1,
-  },
-  {
-    file: '03-uchimsya-po-vecheram-vertical-teal-S.svg',
-    phrase: 'книга, лампа и ручка на фоне цветов',
-    format: 'vertical',
-    size: 'S',
-    scheme: 'teal',
-  },
+  { file: '01-koshelek-moneta-horizontal-lilac-L.svg', phrase: 'Кошелёк, монета', format: 'horizontal', size: 'L', scheme: 'lilac' },
+  { file: '02-telefon-pazl-fon-kniga-square-peach-L.svg', phrase: 'телефон и пазл на фоне книги', format: 'square', size: 'L', scheme: 'peach' },
+  { file: '03-naushniki-cvetok-fon-lampa-vertical-teal-S.svg', phrase: 'наушники и цветок на фоне лампы', format: 'vertical', size: 'S', scheme: 'teal' },
+  { file: '04-kopim-na-otpusk-square-lilac-L.svg', phrase: 'копим на отпуск', format: 'square', size: 'L', scheme: 'lilac', variant: 2 },
 ];
 
 mkdirSync(OUT, { recursive: true });

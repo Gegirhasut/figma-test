@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
+import { gzipSync } from 'node:zlib';
 import { Interpreter, RateLimiter } from './interpret';
 import { providerChain } from './llm/providers';
 
@@ -104,7 +105,9 @@ const MIME: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
-function serveStatic(dist: string, path: string, res: ServerResponse) {
+const gzCache = new Map<string, Buffer>();
+
+function serveStatic(dist: string, path: string, req: IncomingMessage, res: ServerResponse) {
   const safe = normalize(decodeURIComponent(path)).replace(/^([/\\])+/, '');
   let file = resolve(dist, safe);
   if (!file.startsWith(dist + sep) && file !== dist) {
@@ -114,11 +117,23 @@ function serveStatic(dist: string, path: string, res: ServerResponse) {
   if (!existsSync(file) || statSync(file).isDirectory()) file = join(dist, 'index.html');
   const ext = extname(file);
   const immutable = file.includes(`${sep}assets${sep}`);
-  res.writeHead(200, {
+  const headers: Record<string, string> = {
     'content-type': MIME[ext] ?? 'application/octet-stream',
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
-  });
-  res.end(readFileSync(file));
+    vary: 'accept-encoding',
+  };
+  let body: Buffer = readFileSync(file);
+  if (/gzip/.test(String(req.headers['accept-encoding'] ?? '')) && ['.html', '.js', '.css', '.json', '.svg'].includes(ext)) {
+    let gz = gzCache.get(file);
+    if (!gz) {
+      gz = gzipSync(body);
+      gzCache.set(file, gz);
+    }
+    body = gz;
+    headers['content-encoding'] = 'gzip';
+  }
+  res.writeHead(200, headers);
+  res.end(body);
 }
 
 async function main() {
@@ -136,7 +151,7 @@ async function main() {
       const path = (req.url ?? '/').split('?')[0];
       if (await handleApi(req, res, path)) return;
       if (vite) vite.middlewares(req, res, () => res.writeHead(404).end());
-      else serveStatic(dist, path, res);
+      else serveStatic(dist, path, req, res);
     } catch (e) {
       console.error(e);
       if (!res.headersSent) sendJson(res, 500, { error: 'Внутренняя ошибка' });
