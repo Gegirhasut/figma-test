@@ -8,7 +8,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "tsx watch --clear-screen=false --ignore src/client src/server/index.ts",
+    "dev": "tsx watch --clear-screen=false --ignore \"src/client/**\" --ignore \"**/*.timestamp-*\" src/server/index.ts",
     "build": "tsc --noEmit -p tsconfig.json && vite build && vite build --ssr src/server/index.ts --outDir dist-server",
     "start": "node dist-server/index.js",
     "extract": "tsx scripts/extract-library.ts",
