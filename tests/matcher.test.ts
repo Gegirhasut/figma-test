@@ -122,3 +122,30 @@ describe('tag fallback (scenario 1 without AI)', () => {
     expect(interpretByTags('ыыы щщщ')).toEqual(r);
   });
 });
+
+describe('counts written as digits and genitive plurals', () => {
+  const same = (a: string, b: string) => expect(matchObjects(a)).toEqual(matchObjects(b));
+
+  it('digits behave like numerals', () => {
+    same('5 монет', 'пять монет');
+    same('3 монеты', 'три монеты');
+    same('2 книги', 'две книги');
+    expect(matchObjects('5 монет').mode).toBe('objects');
+    expect(ids('5 монет')).toEqual(['coin', 'coin', 'coin', 'coin', 'coin']);
+    expect(ids('3 монеты')).toEqual(['coin', 'coin', 'coin']);
+    expect(ids('2 книги, лампа')).toEqual(['book', 'book', 'lamp']);
+  });
+
+  it('clamps to the largest count', () => {
+    expect(ids('12 монет')).toHaveLength(5);
+    expect(ids('0 монет')).toEqual(['coin']);
+  });
+
+  it('understands zero-ending plurals, also with a fleeting vowel', () => {
+    expect(ids('пять монет')).toHaveLength(5);
+    expect(ids('5 папок')).toEqual(Array(5).fill('folder'));
+    expect(ids('3 ручек')).toEqual(Array(3).fill('pen'));
+    expect(sameWord('монет', 'монета')).toBe(true);
+    expect(sameWord('лап', 'лампа')).toBe(false);
+  });
+});

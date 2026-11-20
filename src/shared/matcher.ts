@@ -22,6 +22,8 @@ const NUMERALS: Record<string, number> = {
   три: 3, четыре: 4, пять: 5,
   несколько: 3, много: 4,
 };
+/** Most copies one word can ask for («пять монет», «12 монет» → 5). */
+const MAX_COUNT = 5;
 
 const BACKGROUND_WORDS = [
   'фон', 'фоне', 'фоном', 'фоновый', 'фоновая', 'фоновое', 'фоновые', 'фоновым', 'фоновой', 'фоновую', 'фоновыми', 'фоновых',
@@ -74,10 +76,25 @@ function lev1(a: string, b: string): boolean {
   return edits + (a.length - i) + (b.length - j) <= 1;
 }
 
+/**
+ * Genitive plural with a zero ending («пять монет», «папок», «ручек»): the bare
+ * word is the stem of the other form, possibly with a fleeting о/е before the
+ * last consonant (папок → папк, ручек → ручк). The stemmer would cut «монет»
+ * down to «мон» as if it were a verb ending.
+ */
+function zeroEnding(word: string, other: string): boolean {
+  if (word.length < 4) return false;
+  const s = stem(other);
+  if (s === other || s.length < 4) return false;
+  const w = word.replace(/ё/g, 'е');
+  return w === s || w.replace(/[ое]([кнл])$/, '$1') === s;
+}
+
 /** Do two words look like forms of the same lemma? */
 export function sameWord(a: string, b: string): boolean {
   const sa = stem(a), sb = stem(b);
   if (sa === sb) return true;
+  if (zeroEnding(a, b) || zeroEnding(b, a)) return true;
   const [short, long] = sa.length <= sb.length ? [sa, sb] : [sb, sa];
   if (short.length >= 3 && long.length - short.length <= 1 && long.startsWith(short)) return true;
   if (short.length >= 5 && lev1(sa, sb)) return true;
@@ -179,7 +196,8 @@ export function matchObjects(text: string): DictionaryResult {
       continue;
     }
     if (/^\d+$/.test(t)) {
-      count = Math.min(5, Math.max(1, parseInt(t, 10)));
+      // Digits behave like numerals («5 монет» = «пять монет»), clamped to the largest numeral.
+      count = Math.min(MAX_COUNT, Math.max(1, parseInt(t, 10)));
       continue;
     }
     if (NUMERALS[t]) {
@@ -277,7 +295,7 @@ export function interpretByTags(text: string): { objects: ObjectRequest[]; reaso
   const main = ranked.slice(0, Math.min(3, ranked.length)).map((r) => ({ id: r.id, role: 'main' as const }));
   const bg = ranked.slice(3, 4).map((r) => ({ id: r.id, role: 'background' as const }));
   const words = [...new Set(ranked.flatMap((r) => hits.get(r.id) ?? []))];
-  return { objects: applyExplicitBackground(text, [...main, ...bg]), reason: `Словарь: ${words.join(', ')}` };
+  return { objects: applyExplicitBackground(text, [...main, ...bg]), reason: `Разобрали по словарю: ${words.join(', ')}` };
 }
 
 /** Deterministic neutral choice when nothing in the phrase is known. */
