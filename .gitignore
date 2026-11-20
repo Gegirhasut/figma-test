@@ -1,0 +1,11 @@
+node_modules/
+dist/
+dist-server/
+build/
+.env
+.env.*
+!.env.example
+*.log
+.claude/
+CLAUDE.md
+.DS_Store
