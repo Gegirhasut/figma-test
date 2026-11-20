@@ -12,6 +12,11 @@
 //    upper-right / lower-right; a very large main object may be cropped by the frame;
 //  • background (monochrome) objects are pushed to an edge and cut by the frame,
 //    roughly half visible, behind the main ones;
+//  • every object stands on one ground plane, so depth is read from the lowest
+//    point of an object's body (its cast shadow excluded): the lower on screen,
+//    the closer to the viewer. Whatever is painted in front must also be closer
+//    — otherwise it looks like it stands on the object behind it. A main object
+//    may cover only a small part of a background object (see DEPTH RULES);
 //  • nothing is generated: the scene only references library fragments.
 // Starting from template slots, a small pattern search removes overlaps and
 // keeps visibility rules; everything is deterministic for the same input.
@@ -57,14 +62,30 @@ const MAIN_TEMPLATES: Record<number, Slot[][]> = {
   ],
 };
 
-/** Edge slots for background objects; the optimiser pulls them to ~half visibility. */
+/**
+ * Edge slots for background objects; the optimiser pulls them to ~half
+ * visibility. In the references they stand behind the main group — at the top
+ * or the upper sides — so that they are further away than the main objects.
+ */
 const BG_SLOTS: Slot[] = [
-  [0.4, 0.02],
-  [0.95, 0.15],
-  [0.04, 0.9],
-  [0.95, 0.95],
-  [0.05, 0.08],
+  [0.12, 0.04],
+  [0.9, 0.06],
+  [0.5, 0.01],
+  [0.03, 0.35],
+  [0.97, 0.38],
 ];
+
+// DEPTH RULES (checked by tests/layout-depth.test.ts)
+/** Two objects overlap for depth purposes when their footprints share at least this part of the smaller one. */
+export const DEPTH_OVERLAP_EPS = 0.01;
+/**
+ * A main object may cover at most this share of a background object's body
+ * (both without shadows). In the client's references the headphones cover the
+ * corner of the vase and the coin touches the lamp's base — well under a fifth.
+ */
+export const MAX_MAIN_ON_BACKGROUND = 0.18;
+/** The optimiser keeps this much extra depth (share of the frame height) between overlapping objects. */
+const DEPTH_MARGIN = 0.02;
 
 function gridSlots(n: number): Slot[] {
   const cols = Math.ceil(Math.sqrt(n));
@@ -86,6 +107,11 @@ interface Body {
   h: number;
   hull: Pt[];
   hullArea: number;
+  /** Footprint of the body without its shadow and its area (source units). */
+  body: Pt[];
+  bodyArea: number;
+  /** Lowest point of the body, relative to the fragment's top-left corner. */
+  base: number;
   x: number;
   y: number;
   ax: number;
@@ -97,6 +123,10 @@ export interface LayoutDiagnostics {
   penalty: number;
   mainVisibility: number[];
   maxMainOverlap: number;
+  /** Overlapping pairs painted in the wrong depth order (must be 0). */
+  depthViolations: number;
+  /** Largest share of a background object's body covered by a main object's body. */
+  maxMainOnBackground: number;
 }
 
 /**
@@ -126,7 +156,12 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
   const bodies: Body[] = reqs.map((r, idx) => {
     const f = lib.objects[r.id][r.role];
     const hull = orient(f.hull);
-    return { idx, id: r.id, role: r.role, w: f.w, h: f.h, hull, hullArea: Math.abs(polygonArea(hull)), x: 0, y: 0, ax: 0, ay: 0 };
+    const body = orient(f.body ?? f.hull);
+    return {
+      idx, id: r.id, role: r.role, w: f.w, h: f.h, hull, hullArea: Math.abs(polygonArea(hull)),
+      body, bodyArea: Math.abs(polygonArea(body)), base: Math.max(...body.map((p) => p.y)),
+      x: 0, y: 0, ax: 0, ay: 0,
+    };
   });
   const mains = bodies.filter((b) => b.role === 'main');
   const bgs = bodies.filter((b) => b.role === 'background');
@@ -145,7 +180,11 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
   const templ = MAIN_TEMPLATES[mainOrder.length]?.[alt] ?? gridSlots(mainOrder.length);
 
   let best: { bodies: Body[]; scale: number; penalty: number; hard: number } | null = null;
-  for (let attempt = 0; attempt < 7; attempt++) {
+  // Background objects that cannot be placed without breaking depth try the
+  // other edge slots before the whole scene is shrunk.
+  const shifts = bgOrder.length && mainOrder.length ? BG_SLOTS.length : 1;
+  attempts: for (let attempt = 0; attempt < 7; attempt++) {
+   for (let shift = 0; shift < shifts; shift++) {
     const s = clamp(scale * Math.pow(0.88, attempt), MIN_SCALE, MAX_SCALE);
     const state = bodies.map((b) => ({ ...b }));
     const byIdx = new Map(state.map((b) => [b.idx, b]));
@@ -156,7 +195,7 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
       t.ay = t.y = v * H;
     });
     bgOrder.forEach((b, i) => {
-      const [u, v] = BG_SLOTS[(i + alt) % BG_SLOTS.length];
+      const [u, v] = BG_SLOTS[(i + alt + shift) % BG_SLOTS.length];
       const t = byIdx.get(b.idx)!;
       t.ax = t.x = (mirror ? 1 - u : u) * W;
       t.ay = t.y = v * H;
@@ -167,7 +206,8 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
     if (!best || hard < best.hard - 1e-6 || (Math.abs(hard - best.hard) < 1e-6 && total < best.penalty)) {
       best = { bodies: state, scale: s, penalty: total, hard };
     }
-    if (hard < 0.05) break;
+    if (hard < 0.05) break attempts;
+   }
   }
   const final = best!;
   const ctx = makeContext(final.bodies, final.scale, W, H);
@@ -231,9 +271,22 @@ function worldHull(b: Body, s: number): Pt[] {
   return b.hull.map((p) => placePoint(p, pl));
 }
 
+function worldBody(b: Body, s: number): Pt[] {
+  const pl: Placement = { x: b.x, y: b.y, rotation: 0, scale: s, w: b.w, h: b.h };
+  return b.body.map((p) => placePoint(p, pl));
+}
+
+/** Where the object touches the ground, in frame units: larger = closer to the viewer. */
+function worldBase(b: Body, s: number): number {
+  return b.y + (b.base - b.h / 2) * s;
+}
+
 function evaluate(state: Body[], ctx: Ctx): { total: number; hard: number } {
   const hulls = state.map((b) => worldHull(b, ctx.s));
   const areas = state.map((b) => b.hullArea * ctx.s * ctx.s);
+  const bodies = state.map((b) => worldBody(b, ctx.s));
+  const bases = state.map((b) => worldBase(b, ctx.s));
+  const margin = DEPTH_MARGIN * ctx.H;
   let hard = 0;
   let soft = 0;
   const mainIdx: number[] = [];
@@ -262,7 +315,14 @@ function evaluate(state: Body[], ctx: Ctx): { total: number; hard: number } {
       if (a.role === 'main' && b.role === 'main') {
         hard += 6 * Math.max(0, inter / Math.min(areas[i], areas[j]) - 0.05);
       } else if (a.role !== b.role) {
+        // Background behind main: the main object must be closer (lower base)
+        // and may cover only a small part of the background object's body.
         const bgI = a.role === 'background' ? i : j;
+        const mI = bgI === i ? j : i;
+        hard += (8 * Math.max(0, bases[bgI] + margin - bases[mI])) / ctx.H;
+        const bodyInter = intersectionArea(bodies[mI], bodies[bgI]);
+        const bgBody = state[bgI].bodyArea * ctx.s * ctx.s;
+        hard += 6 * Math.max(0, bodyInter / bgBody - (MAX_MAIN_ON_BACKGROUND - 0.03));
         soft += 2 * Math.max(0, inter / areas[bgI] - 0.3);
       } else {
         soft += 3 * Math.max(0, inter / Math.min(areas[i], areas[j]) - 0.08);
@@ -347,39 +407,38 @@ function optimise(state: Body[], ctx: Ctx): void {
   }
 }
 
-/** Background first; then by the lowest point of the footprint (closer to the viewer in isometry). */
+/**
+ * Background first, then main objects; within each group by depth — the
+ * object standing further away (higher base) is painted first. Overlapping
+ * background/main pairs are kept depth-consistent by the optimiser, so the
+ * whole order follows depth wherever objects overlap.
+ */
 function paintOrder(state: Body[], ctx: Ctx): Body[] {
-  const key = (b: Body) => Math.max(...worldHull(b, ctx.s).map((p) => p.y));
-  const sorted = [...state].sort((a, b) => {
+  return [...state].sort((a, b) => {
     if (a.role !== b.role) return a.role === 'background' ? -1 : 1;
-    return key(a) - key(b) || a.idx - b.idx;
+    return worldBase(a, ctx.s) - worldBase(b, ctx.s) || a.idx - b.idx;
   });
-  // A small object resting on a bigger one is painted above it.
-  const hulls = new Map(sorted.map((b) => [b.idx, worldHull(b, ctx.s)]));
-  let moves = 0;
-  for (let i = 0; i < sorted.length && moves < 50; i++) {
-    for (let j = i + 1; j < sorted.length; j++) {
-      const a = sorted[i], b = sorted[j];
-      if (a.role !== b.role) continue;
-      const inter = intersectionArea(hulls.get(a.idx)!, hulls.get(b.idx)!);
-      const aArea = a.hullArea * ctx.s * ctx.s;
-      const bArea = b.hullArea * ctx.s * ctx.s;
-      if (aArea < bArea && inter / aArea > 0.5) {
-        sorted.splice(i, 1);
-        sorted.splice(j, 0, a);
-        moves++;
-        i--;
-        break;
-      }
-    }
-  }
-  return sorted;
 }
 
-function diagnostics(state: Body[], ctx: Ctx): { mainVisibility: number[]; maxMainOverlap: number } {
+function diagnostics(state: Body[], ctx: Ctx): Omit<LayoutDiagnostics, 'scale' | 'penalty'> {
   const hulls = state.map((b) => worldHull(b, ctx.s));
   const mainVisibility: number[] = [];
   let maxMainOverlap = 0;
+  const order = paintOrder(state, ctx);
+  let depthViolations = 0;
+  let maxMainOnBackground = 0;
+  for (let i = 0; i < order.length; i++) {
+    for (let j = i + 1; j < order.length; j++) {
+      const a = order[i], b = order[j];
+      const inter = intersectionArea(worldHull(a, ctx.s), worldHull(b, ctx.s));
+      const eps = DEPTH_OVERLAP_EPS * Math.min(a.hullArea, b.hullArea) * ctx.s * ctx.s;
+      if (inter > eps && worldBase(b, ctx.s) < worldBase(a, ctx.s)) depthViolations++;
+      if (a.role === 'background' && b.role === 'main') {
+        const r = intersectionArea(worldBody(a, ctx.s), worldBody(b, ctx.s)) / (a.bodyArea * ctx.s * ctx.s);
+        maxMainOnBackground = Math.max(maxMainOnBackground, r);
+      }
+    }
+  }
   state.forEach((b, i) => {
     if (b.role !== 'main') return;
     mainVisibility.push(intersectionArea(hulls[i], ctx.frame) / (b.hullArea * ctx.s * ctx.s));
@@ -389,7 +448,7 @@ function diagnostics(state: Body[], ctx: Ctx): { mainVisibility: number[]; maxMa
       maxMainOverlap = Math.max(maxMainOverlap, inter / (Math.min(b.hullArea, c.hullArea) * ctx.s * ctx.s));
     });
   });
-  return { mainVisibility, maxMainOverlap };
+  return { mainVisibility, maxMainOverlap, depthViolations, maxMainOnBackground };
 }
 
 // ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 // Phrase → library objects on the server: cache, AI quota, provider chain and
 // the dictionary as the last resort, so a request always gets an answer.
 
-import { interpretByTags, normalize } from '../shared/matcher';
+import { applyExplicitBackground, interpretByTags, normalize } from '../shared/matcher';
 import type { ObjectRequest } from '../shared/types';
 import type { Provider, ProviderName } from './llm/providers';
 
@@ -63,7 +63,9 @@ export class Interpreter {
   async interpret(phrase: string, browserId: string, ip: string): Promise<InterpretResponse> {
     const key = normalize(phrase);
     const cached = this.cache.get(key);
-    if (cached) return { objects: cached.objects, source: cached.source, cached: true, aiLeft: this.aiLeft(browserId, ip) };
+    // The cache holds what the provider said; an explicit «на фоне» in this
+    // phrase is applied on the way out (the cache key drops punctuation).
+    if (cached) return { objects: applyExplicitBackground(phrase, cached.objects), source: cached.source, cached: true, aiLeft: this.aiLeft(browserId, ip) };
 
     const chain = this.providers();
     const dictionary = (extra: Partial<InterpretResponse>): InterpretResponse => {
@@ -81,7 +83,7 @@ export class Interpreter {
         const r = await p.interpret(phrase);
         this.log(`[interpret] ${p.name} ${r.latencyMs}ms in=${r.inputTokens} out=${r.outputTokens} → ${r.objects.map((o) => o.id).join(',')}`);
         this.cache.set(key, { objects: r.objects, source: p.name });
-        return { objects: r.objects, source: p.name, cached: false, aiLeft: this.aiLeft(browserId, ip) };
+        return { objects: applyExplicitBackground(phrase, r.objects), source: p.name, cached: false, aiLeft: this.aiLeft(browserId, ip) };
       } catch (e) {
         this.log(`[interpret] ${p.name} failed: ${(e as Error).message}`);
       }

@@ -67,6 +67,24 @@ describe('interpreter', () => {
     expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
   });
 
+  it('an explicit «на фоне» in the phrase wins over the roles from the LLM, also from the cache', async () => {
+    const a = fake('anthropic', ok(['book', 'phone']));
+    const it = new Interpreter(() => [a], { perBrowser: 3, perIp: 10 });
+    const r = await it.interpret('звонки: книга на фоне, телефон', 'b', 'ip');
+    expect(r.objects).toEqual([
+      { id: 'book', role: 'background' },
+      { id: 'phone', role: 'main' },
+    ]);
+    // Same cache key (punctuation is dropped), but here the phone is the background one.
+    const c = await it.interpret('звонки: книга, на фоне телефон', 'b', 'ip');
+    expect(c.cached).toBe(true);
+    expect(c.objects).toEqual([
+      { id: 'book', role: 'main' },
+      { id: 'phone', role: 'background' },
+    ]);
+    expect(a.calls).toBe(1);
+  });
+
   it('without keys answers from the dictionary and does not spend the quota', async () => {
     const it = new Interpreter(() => [], { perBrowser: 3, perIp: 10 });
     const r = await it.interpret('новая идея', 'b', 'ip');

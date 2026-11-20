@@ -28,8 +28,8 @@ import {
   type Size,
   type Variant,
 } from '../src/shared/types';
-import { colorsUsed, footprint, innerMarkup, nodeBox, nodesBox, normColor, readSection, tokenizeMarkup, type SourceSection } from './lib/library-source';
-import { pathArea } from './lib/svg-geom';
+import { colorsUsed, elementPoints, footprint, innerMarkup, nodeBox, nodesBox, normColor, readSection, tokenizeMarkup, type SourceSection } from './lib/library-source';
+import { convexHull, pathArea, simplifyHull } from './lib/svg-geom';
 import { walk } from './lib/xml';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -83,6 +83,15 @@ function makeFragment(sec: SourceSection, nodes: import('./lib/xml').XNode[], co
     total += a;
   }
   const roleShare = Object.fromEntries(Object.entries(share).map(([r, a]) => [r, round(a / (total || 1))])) as Partial<Record<Role, number>>;
+  // Body without the cast shadow: in this style the shadow (and the outlines)
+  // is the darkest colour — ink on main objects, bgDark on monochrome ones —
+  // and every surface of the object itself is filled with a lighter colour.
+  const shadowRole: Role = roles.includes('ink') ? 'ink' : 'bgDark';
+  const bodyPts = nodes
+    .flatMap((x) => [x, ...walk(x)])
+    .filter((n) => n.tag !== 'g' && n.attrs.fill && n.attrs.fill !== 'none' && !n.attrs.fill.startsWith('url(') && colorToRole.get(normColor(n.attrs.fill)) !== shadowRole)
+    .flatMap(elementPoints);
+  const body = bodyPts.length >= 3 ? simplifyHull(convexHull(bodyPts), 18).map((p) => ({ x: round(p.x - box.minX, 1), y: round(p.y - box.minY, 1) })) : hull;
   return {
     markup,
     x: round(box.minX),
@@ -90,6 +99,7 @@ function makeFragment(sec: SourceSection, nodes: import('./lib/xml').XNode[], co
     w: round(box.maxX - box.minX),
     h: round(box.maxY - box.minY),
     hull,
+    body,
     roles: ROLES.filter((r) => roles.includes(r)),
     roleShare,
   };

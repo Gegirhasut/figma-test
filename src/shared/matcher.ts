@@ -23,7 +23,10 @@ const NUMERALS: Record<string, number> = {
   несколько: 3, много: 4,
 };
 
-const BACKGROUND_WORDS = ['фон', 'фоне', 'фоном', 'фоновый', 'фоновая', 'фоновые', 'фоновым', 'фоновыми', 'сзади', 'позади'];
+const BACKGROUND_WORDS = [
+  'фон', 'фоне', 'фоном', 'фоновый', 'фоновая', 'фоновое', 'фоновые', 'фоновым', 'фоновой', 'фоновую', 'фоновыми', 'фоновых',
+  'сзади', 'позади', 'заднем', 'background', 'behind',
+];
 
 const SUFFIXES = [
   'иями', 'ями', 'ами', 'иях', 'ией', 'ого', 'его', 'ему', 'ому', 'ыми', 'ими', 'ешь', 'ете', 'ите', 'ться', 'тся',
@@ -110,18 +113,69 @@ export interface DictionaryResult {
 const MAX_OBJECTS = 8;
 const MAX_MAIN = 4;
 
-/** Finds explicit object names in the phrase. */
+const CONJUNCTIONS = new Set(['и', 'или', 'а', 'да', 'плюс', 'and', 'or']);
+const NAMES = LEXICON.filter((l) => l.kind === 'name');
+
+function isNamed(tokens: string[], pos: number): boolean {
+  return NAMES.some((l) => matchAt(tokens, pos, l));
+}
+
+/** Splits the phrase into clauses (by punctuation) and returns the tokens with their clause number. */
+function clauseTokens(text: string): { tokens: string[]; clause: number[] } {
+  const tokens: string[] = [];
+  const clause: number[] = [];
+  text.split(/[,;.!?:\n()]+/).forEach((part, c) => {
+    for (const t of tokenize(part)) {
+      tokens.push(t);
+      clause.push(c);
+    }
+  });
+  return { tokens, clause };
+}
+
+/**
+ * Finds explicit object names in the phrase.
+ *
+ * Background markers («на фоне», «фоном», «фоновый», «сзади», «на заднем плане»):
+ *  • followed by objects in the same clause — those objects and every later one
+ *    are background: «кошелёк на фоне книги и лампы», «фоном книга», «на фоне книги, лампы»;
+ *  • nothing follows in the clause — the object right before the marker is
+ *    background: «наушники, телефон, книга на фоне», «книга фоном, телефон».
+ */
 export function matchObjects(text: string): DictionaryResult {
-  const tokens = tokenize(text);
+  const { tokens, clause } = clauseTokens(text);
   const objects: ObjectRequest[] = [];
   const named: string[] = [];
   const unmatched: string[] = [];
+  /** Objects pushed for the last named word (several with a count). */
+  let last: { from: number; to: number; clause: number } | null = null;
   let count = 1;
   let background = false;
+  /** Last clause the current «на фоне» covers. */
+  let bgClause = -1;
   for (let i = 0; i < tokens.length; i++) {
     const t = tokens[i];
+    if (t === 'плане' && tokens[i - 1] === 'заднем') continue;
+    if (background && clause[i] > bgClause) background = false;
     if (BACKGROUND_WORDS.includes(t)) {
-      background = true;
+      // Does an object name follow the marker directly («на фоне книги», «фоном старая книга»)?
+      // A conjunction or the end of the clause means the marker refers back.
+      let follows = false;
+      for (let k = i + 1; k < tokens.length && clause[k] === clause[i] && k - i <= 3 && !CONJUNCTIONS.has(tokens[k]); k++) {
+        if (isNamed(tokens, k)) {
+          follows = true;
+          break;
+        }
+      }
+      if (!follows && last && last.clause === clause[i]) {
+        // «книга на фоне», «книга фоном, телефон»: the marker refers back.
+        for (let n = last.from; n < last.to; n++) objects[n] = { ...objects[n], role: 'background' };
+      } else {
+        // «на фоне книги и лампы»: everything named later in this clause; a lone
+        // «на фоне:» at the start of a clause also covers the next clause.
+        background = true;
+        bgClause = follows || (last && last.clause === clause[i]) ? clause[i] : clause[i] + 1;
+      }
       continue;
     }
     if (/^\d+$/.test(t)) {
@@ -133,9 +187,11 @@ export function matchObjects(text: string): DictionaryResult {
       continue;
     }
     if (STOP.has(t)) continue;
-    const lx = LEXICON.filter((l) => l.kind === 'name').find((l) => matchAt(tokens, i, l));
+    const lx = NAMES.find((l) => matchAt(tokens, i, l));
     if (lx) {
+      const from = objects.length;
       for (let k = 0; k < count && objects.length < MAX_OBJECTS; k++) objects.push({ id: lx.id, role: background ? 'background' : 'main' });
+      last = { from, to: objects.length, clause: clause[i] };
       named.push(tokens.slice(i, i + lx.words.length).join(' '));
       i += lx.words.length - 1;
       count = 1;
@@ -149,6 +205,36 @@ export function matchObjects(text: string): DictionaryResult {
     named,
     unmatched,
   };
+}
+
+/** Objects the phrase explicitly puts in the background («книга на фоне», «на фоне книги»). */
+export function explicitBackground(text: string): ObjectId[] {
+  const objs = matchObjects(text).objects;
+  // Only words marked by the user count, not the ones moved back by the four-main limit.
+  const marked = new Set<ObjectId>();
+  const { tokens } = clauseTokens(text);
+  if (!tokens.some((t) => BACKGROUND_WORDS.includes(t))) return [];
+  for (const o of objs) if (o.role === 'background') marked.add(o.id);
+  // An object also named without a marker stays as the interpreter chose it.
+  for (const o of objs) if (o.role === 'main') marked.delete(o.id);
+  return [...marked];
+}
+
+/**
+ * An explicit «на фоне» in the phrase wins over the roles chosen by the LLM
+ * or by the meaning dictionary: those objects become background, and are
+ * added if the interpreter left them out. At least one main object remains.
+ */
+export function applyExplicitBackground(text: string, objects: ObjectRequest[]): ObjectRequest[] {
+  const bg = explicitBackground(text);
+  if (!bg.length) return objects;
+  const out = objects.map((o) => (bg.includes(o.id) ? { ...o, role: 'background' as const } : o));
+  for (const id of bg) if (!out.some((o) => o.id === id)) out.push({ id, role: 'background' });
+  if (!out.some((o) => o.role === 'main')) {
+    const k = out.findIndex((o) => !bg.includes(o.id));
+    if (k >= 0) out[k] = { ...out[k], role: 'main' };
+  }
+  return out;
 }
 
 /** Keeps at most four main objects; the rest go to the background. */
@@ -191,7 +277,7 @@ export function interpretByTags(text: string): { objects: ObjectRequest[]; reaso
   const main = ranked.slice(0, Math.min(3, ranked.length)).map((r) => ({ id: r.id, role: 'main' as const }));
   const bg = ranked.slice(3, 4).map((r) => ({ id: r.id, role: 'background' as const }));
   const words = [...new Set(ranked.flatMap((r) => hits.get(r.id) ?? []))];
-  return { objects: [...main, ...bg], reason: `Словарь: ${words.join(', ')}` };
+  return { objects: applyExplicitBackground(text, [...main, ...bg]), reason: `Словарь: ${words.join(', ')}` };
 }
 
 /** Deterministic neutral choice when nothing in the phrase is known. */

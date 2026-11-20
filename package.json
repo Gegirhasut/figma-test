@@ -13,6 +13,7 @@
     "start": "node dist-server/index.js",
     "extract": "tsx scripts/extract-library.ts",
     "examples": "tsx scripts/make-examples.ts",
+    "checks": "tsx scripts/render-checks.ts",
     "compare-llm": "tsx scripts/compare-providers.ts",
     "test": "node scripts/run-tests.mjs",
     "test:resume": "node scripts/run-tests.mjs --resume",

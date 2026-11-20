@@ -445,6 +445,29 @@ button:disabled {
   border-radius: 10px;
 }
 
+/* caption under the S/L switch */
+.size-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--muted);
+}
+
+.size-hint.phone {
+  /* phones: a short-lived bubble under the settings row after a switch or a long press */
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 5;
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 4px 16px rgba(22, 21, 26, 0.12);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 /* sheets (object picker, palette) */
 
 .sheet-backdrop {
@@ -741,6 +764,7 @@ textarea:focus {
     font-size: 16px;
   }
   .settings {
+    position: relative;
     flex-wrap: nowrap;
     gap: 10px;
     justify-content: space-between;

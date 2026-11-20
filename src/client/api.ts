@@ -1,4 +1,4 @@
-import { interpretByTags, matchObjects } from '../shared/matcher';
+import { applyExplicitBackground, interpretByTags, matchObjects } from '../shared/matcher';
 import type { ObjectRequest } from '../shared/types';
 
 export type InterpretSource = 'dictionary' | 'anthropic' | 'deepseek' | 'offline';
@@ -44,7 +44,7 @@ export async function interpretPhrase(phrase: string): Promise<Interpretation> {
     if (a.limited) note = 'Лимит AI-запросов исчерпан — эту фразу разобрали по словарю. Перечисление объектов работает без ограничений.';
     else if (a.source === 'dictionary') note = 'Фразу разобрали по словарю';
     else if (a.aiLeft === 0) note = 'Это был последний AI-запрос; дальше фразы разбираются по словарю';
-    return { objects: a.objects, source: a.source, note };
+    return { objects: applyExplicitBackground(phrase, a.objects), source: a.source, note };
   } catch {
     const d = interpretByTags(phrase);
     return { objects: d.objects, source: 'offline', note: 'Сервер недоступен — собрали по словарю' };

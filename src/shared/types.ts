@@ -37,6 +37,12 @@ export interface Fragment {
   h: number;
   /** Convex footprint, relative to (x, y). */
   hull: Pt[];
+  /**
+   * Convex footprint of the object's own body without its cast shadow,
+   * relative to (x, y). Its lowest point is where the object stands on the
+   * common ground plane, which decides depth (see layout.ts).
+   */
+  body: Pt[];
   /** Roles used by the markup. */
   roles: Role[];
   /** Approximate share of the painted area per fill role. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { interpretByTags, matchObjects, sameWord } from '../src/shared/matcher';
+import { applyExplicitBackground, interpretByTags, matchObjects, sameWord } from '../src/shared/matcher';
 
 const ids = (t: string) => matchObjects(t).objects.map((o) => o.id);
 
@@ -44,6 +44,46 @@ describe('dictionary matcher (scenario 2)', () => {
       { id: 'wallet', role: 'main' },
       { id: 'book', role: 'background' },
     ]);
+  });
+
+  const roles = (t: string) => matchObjects(t).objects.map((o) => `${o.id}/${o.role}`);
+
+  it.each([
+    // «X на фоне»: the marker refers back to the object before it.
+    ['наушники, телефон, книга на фоне', ['headphones/main', 'phone/main', 'book/background']],
+    ['телефон, наушники, книга — на фоне', ['phone/main', 'headphones/main', 'book/background']],
+    ['книга на фоне и телефон', ['book/background', 'phone/main']],
+    ['книга фоном, телефон', ['book/background', 'phone/main']],
+    ['лампа на заднем плане и книга', ['lamp/background', 'book/main']],
+    ['две монеты на фоне, кошелёк', ['coin/background', 'coin/background', 'wallet/main']],
+    // «на фоне X», «фоном X»: the objects after the marker in its clause.
+    ['телефон и пазл на фоне книги', ['phone/main', 'puzzle/main', 'book/background']],
+    ['кошелёк на фоне книги и лампы', ['wallet/main', 'book/background', 'lamp/background']],
+    ['фоном книга, кошелёк', ['book/background', 'wallet/main']],
+    ['на заднем плане книга, телефон', ['book/background', 'phone/main']],
+    ['фоновая лампа и монета', ['lamp/background', 'coin/background']],
+  ])('«на фоне»: %s → %j', (text, expected) => {
+    expect(roles(text)).toEqual(expected);
+    expect(matchObjects(text).mode).toBe('objects');
+  });
+
+  it('an explicit «на фоне» overrides roles chosen by the LLM or the meaning dictionary', () => {
+    const llm = [
+      { id: 'headphones', role: 'main' },
+      { id: 'phone', role: 'main' },
+      { id: 'book', role: 'main' },
+    ] as const;
+    expect(applyExplicitBackground('музыка в дороге, книга на фоне', [...llm]).map((o) => o.role)).toEqual(['main', 'main', 'background']);
+    // Missing background object is added; nothing changes without a marker.
+    expect(applyExplicitBackground('коплю на мечту на фоне цветка', [{ id: 'coin', role: 'main' }])).toEqual([
+      { id: 'coin', role: 'main' },
+      { id: 'flower', role: 'background' },
+    ]);
+    expect(applyExplicitBackground('музыка в дороге', [...llm])).toEqual(llm);
+    // The dictionary fallback for scenario 1 honours it too.
+    const d = interpretByTags('копим на отпуск, кошелёк на фоне').objects;
+    expect(d.find((o) => o.id === 'wallet')?.role).toBe('background');
+    expect(d.some((o) => o.role === 'main')).toBe(true);
   });
 
   it('keeps at most four main objects', () => {

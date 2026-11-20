@@ -15,6 +15,13 @@ import { libraryIfReady, loadLibrary } from './library';
 const DEMO_PHRASE = 'Кошелёк, монета';
 const PLACEHOLDER = 'Например, «копим на отпуск»';
 
+/** What the S/L switch does (both are the client's library, S is the simplified set for small sizes). */
+const SIZE_HINT: Record<Size, string> = {
+  S: 'Упрощённые объекты для маленьких размеров',
+  L: 'Подробные объекты для крупных размеров',
+};
+const SIZE_HINT_ALL = 'S — упрощённые объекты для маленьких размеров, L — подробные для крупных';
+
 const FORMATS: { id: Format; label: string }[] = [
   { id: 'square', label: 'Квадрат' },
   { id: 'horizontal', label: 'Горизонтальный' },
@@ -213,7 +220,18 @@ export default function App() {
     }
   };
 
+  const [sizeHint, setSizeHint] = useState(false);
+  const sizeHintTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(sizeHintTimer.current), []);
+  /** Phones have no hover: the explanation shows for a moment after a switch or a long press. */
+  const flashSizeHint = () => {
+    setSizeHint(true);
+    clearTimeout(sizeHintTimer.current);
+    sizeHintTimer.current = setTimeout(() => setSizeHint(false), 3500);
+  };
+
   const changeSize = async (s: Size) => {
+    if (isPhone) flashSizeHint();
     setSize(s);
     if (!scene) return;
     const l = await loadLibrary(s);
@@ -430,14 +448,28 @@ export default function App() {
           </div>
           <div className="group">
             <h3>Детализация</h3>
-            <div className="seg" role="radiogroup" aria-label="Детализация">
+            <div className="seg" role="radiogroup" aria-label="Детализация" aria-describedby="size-hint" title={SIZE_HINT_ALL} onContextMenu={(e) => {
+              if (!isPhone) return;
+              e.preventDefault();
+              flashSizeHint();
+            }}>
               {(['S', 'L'] as Size[]).map((s) => (
-                <button key={s} role="radio" aria-checked={size === s} className={size === s ? 'on' : ''} onClick={() => changeSize(s)}>
+                <button key={s} role="radio" aria-checked={size === s} className={size === s ? 'on' : ''} onClick={() => changeSize(s)} title={`${s} — ${SIZE_HINT[s].toLowerCase()}`}>
                   {s}
                 </button>
               ))}
             </div>
+            {!isPhone && (
+              <p className="size-hint" id="size-hint">
+                {SIZE_HINT[size]}
+              </p>
+            )}
           </div>
+          {isPhone && sizeHint && (
+            <p className="size-hint phone" id="size-hint" role="status">
+              {size} — {SIZE_HINT[size].toLowerCase()}
+            </p>
+          )}
           {!isPhone && (
             <button className="btn wide" onClick={download}>
               Скачать SVG
