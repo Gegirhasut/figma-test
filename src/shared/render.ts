@@ -3,7 +3,7 @@
 
 import { CATALOG_BY_ID } from './catalog';
 import { resolveMarkup, tintPalette } from './palette';
-import { BG_ROLES, type DecorStyle, type Fragment, type LibraryData, type Palette, type Role, type Scene, type SceneItem } from './types';
+import { type DecorStyle, type Fragment, type LibraryData, type Palette, type Role, type Scene, type SceneItem } from './types';
 
 export function itemFragment(item: SceneItem, lib: LibraryData): Fragment {
   return lib.objects[item.id][item.role];
@@ -45,11 +45,6 @@ export function decorPlacements(style: DecorStyle, w: number, h: number): DecorP
 
 export function decorStyle(lib: LibraryData, id: DecorStyle['id']): DecorStyle {
   return lib.decor.find((d) => d.id === id) ?? lib.decor[0];
-}
-
-/** Background layer may use only background roles (plus the white glint drawn in the client's own swatch). */
-export function backgroundPalette(palette: Palette): Palette {
-  return palette;
 }
 
 export function objectLabel(item: SceneItem): string {
@@ -110,8 +105,6 @@ export function sceneColorUsage(scene: Scene, lib: LibraryData, palette: Palette
   }
   return { background, mainObjects, backgroundObjects };
 }
-
-export const BACKGROUND_ROLES_ALLOWED: Role[] = [...BG_ROLES];
 
 function n(v: number): string {
   return String(Math.round(v * 1000) / 1000);

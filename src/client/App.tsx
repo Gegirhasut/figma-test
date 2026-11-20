@@ -230,11 +230,15 @@ export default function App() {
     sizeHintTimer.current = setTimeout(() => setSizeHint(false), 3500);
   };
 
+  /** Last S/L click; an older library load that finishes later is ignored. */
+  const sizeRequest = useRef(0);
   const changeSize = async (s: Size) => {
     if (isPhone) flashSizeHint();
     setSize(s);
+    const req = ++sizeRequest.current;
     if (!scene) return;
     const l = await loadLibrary(s);
+    if (req !== sizeRequest.current) return;
     setLib(l);
     setScene((cur) => (cur ? convertSceneSize(cur, l) : cur));
   };
