@@ -19,6 +19,7 @@ const env = process.env;
 // The built server lives in dist-server/; running from source means development.
 const isProd = env.NODE_ENV === 'production' || import.meta.url.includes('/dist-server/');
 const PORT = Number(env.PORT) || 5173;
+const HOST = env.HOST || '127.0.0.1';
 const COOKIE = 'skl_id';
 
 const interpreter = new Interpreter(
@@ -30,9 +31,10 @@ const limiter = new RateLimiter(Number(env.RATE_LIMIT_PER_MINUTE) || 30);
 
 function clientIp(req: IncomingMessage): string {
   if (env.TRUST_PROXY === '1') {
+    // The proxy appends the real client address last; earlier entries come from the client and can be forged.
     const xf = req.headers['x-forwarded-for'];
-    const first = (Array.isArray(xf) ? xf[0] : xf)?.split(',')[0]?.trim();
-    if (first) return first;
+    const last = (Array.isArray(xf) ? xf.join(',') : xf)?.split(',').pop()?.trim();
+    if (last) return last;
   }
   return req.socket.remoteAddress ?? 'unknown';
 }
@@ -158,7 +160,7 @@ async function main() {
       else res.end();
     }
   });
-  server.listen(PORT, () => {
+  server.listen(PORT, HOST, () => {
     const ai = providerChain(env).map((p) => `${p.name}:${p.model}`).join(' → ') || 'нет ключей, только словарь';
     console.log(`Складно: http://localhost:${PORT} (${isProd ? 'production' : 'development'}; AI: ${ai})`);
   });
