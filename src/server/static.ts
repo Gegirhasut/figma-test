@@ -18,6 +18,25 @@ const MIME: Record<string, string> = {
   '.txt': 'text/plain; charset=utf-8',
 };
 
+/**
+ * Content-Security-Policy of the built frontend: scripts, styles, data and
+ * images only from this origin, the Onest font from Google Fonts. The build has
+ * no inline scripts or style attributes (React sets styles through the CSSOM,
+ * which CSP allows); blob:/data: images cover the SVG export and favicons.
+ */
+export const CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob:",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+].join('; ');
+
 export type StaticTarget = { status: 200; file: string } | { status: 403 | 404 };
 
 /**
@@ -45,7 +64,7 @@ const gzCache = new Map<string, Buffer>();
 export function serveStatic(dist: string, path: string, req: IncomingMessage, res: ServerResponse) {
   const t = staticTarget(dist, path);
   if (t.status !== 200) {
-    res.writeHead(t.status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' }).end(t.status === 404 ? 'Not found' : 'Forbidden');
+    res.writeHead(t.status, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store', 'content-security-policy': CSP }).end(t.status === 404 ? 'Not found' : 'Forbidden');
     return;
   }
   const { file } = t;
@@ -55,6 +74,7 @@ export function serveStatic(dist: string, path: string, req: IncomingMessage, re
     'content-type': MIME[ext] ?? 'application/octet-stream',
     'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'no-cache',
     vary: 'accept-encoding',
+    'content-security-policy': CSP,
   };
   let body: Buffer = readFileSync(file);
   if (/gzip/.test(String(req.headers['accept-encoding'] ?? '')) && ['.html', '.js', '.css', '.json', '.svg'].includes(ext)) {
