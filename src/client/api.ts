@@ -1,3 +1,4 @@
+import { isObjectId } from '../shared/catalog';
 import { applyExplicitBackground, interpretByTags, matchObjects } from '../shared/matcher';
 import type { ObjectRequest } from '../shared/types';
 
@@ -27,6 +28,26 @@ export interface ServerAnswer {
   aiResetAt?: number;
   /** The server's own explanation («Совпадений в словаре нет — …», «AI не ответил вовремя — …»). */
   note?: string;
+}
+
+/** Most objects a server answer may bring (the server itself sends at most 5). */
+const MAX_SERVER_OBJECTS = 5;
+
+/**
+ * Only objects of this library get into the scene, whatever the server sent:
+ * unknown ids are dropped and any role but «background» becomes «main».
+ */
+export function sanitizeServerObjects(list: unknown): ObjectRequest[] {
+  if (!Array.isArray(list)) return [];
+  const out: ObjectRequest[] = [];
+  for (const o of list) {
+    const id = (o as { id?: unknown } | null)?.id;
+    if (!isObjectId(id)) continue;
+    out.push({ id, role: (o as { role?: unknown }).role === 'background' ? 'background' : 'main' });
+    if (out.length >= MAX_SERVER_OBJECTS) break;
+  }
+  if (out.length && !out.some((o) => o.role === 'main')) out[0] = { ...out[0], role: 'main' };
+  return out;
 }
 
 /** The client gives up on the server after this and answers from the dictionary. */
@@ -75,8 +96,10 @@ export async function interpretPhrase(phrase: string, timeoutMs = CLIENT_TIMEOUT
     if (res.status === 429) return offline('Слишком много запросов подряд — собрали по словарю. Подождите минуту и попробуйте снова.', 'busy');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const a = (await res.json()) as ServerAnswer;
+    const objects = sanitizeServerObjects(a?.objects);
+    if (!objects.length) return offline('Ответ сервера не подошёл — собрали по словарю.', 'offline');
     const problem = a.limited ? 'limit' : a.timedOut ? 'timeout' : undefined;
-    return { objects: applyExplicitBackground(phrase, a.objects), source: a.source, note: answerNote(a), problem, aiLeft: a.aiLeft, aiLimit: a.aiLimit };
+    return { objects: applyExplicitBackground(phrase, objects), source: a.source, note: answerNote(a), problem, aiLeft: a.aiLeft, aiLimit: a.aiLimit };
   } catch {
     if (ctrl.signal.aborted) return offline('Сервер не ответил вовремя — собрали по словарю. Попробуйте ещё раз чуть позже.', 'timeout');
     return offline('Сервер недоступен — собрали по словарю. Проверьте интернет и попробуйте ещё раз.', 'offline');
