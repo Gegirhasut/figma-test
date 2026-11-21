@@ -5,7 +5,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { layoutWithDiagnostics } from '../src/shared/layout';
+import { convertSceneSize, layoutWithDiagnostics } from '../src/shared/layout';
 import { loadLibrary } from '../src/shared/library-fs';
 import { interpretByTags, matchObjects } from '../src/shared/matcher';
 import { SCHEMES } from '../src/shared/palette';
@@ -30,7 +30,19 @@ const EXAMPLES: Example[] = [
   { file: '01-koshelek-moneta-horizontal-lilac-L.svg', phrase: 'Кошелёк, монета', format: 'horizontal', size: 'L', scheme: 'lilac' },
   { file: '02-telefon-pazl-fon-kniga-square-peach-L.svg', phrase: 'телефон и пазл на фоне книги', format: 'square', size: 'L', scheme: 'peach' },
   { file: '03-naushniki-cvetok-fon-lampa-vertical-teal-S.svg', phrase: 'наушники и цветок на фоне лампы', format: 'vertical', size: 'S', scheme: 'teal' },
-  { file: '04-kopim-na-otpusk-square-lilac-L.svg', phrase: 'копим на отпуск', format: 'square', size: 'L', scheme: 'lilac', variant: 2 },
+  {
+    file: '04-vecher-s-knigoy-horizontal-lilac-L.svg',
+    phrase: 'Вечер с книгой',
+    format: 'horizontal',
+    size: 'L',
+    scheme: 'lilac',
+    variant: 2,
+    objects: [
+      { id: 'book', role: 'main' },
+      { id: 'lamp', role: 'main' },
+      { id: 'flower', role: 'background' },
+    ],
+  },
 ];
 
 mkdirSync(OUT, { recursive: true });
@@ -39,7 +51,10 @@ for (const ex of EXAMPLES) {
   const objects = ex.objects ?? (dict.mode === 'objects' ? dict.objects : interpretByTags(ex.phrase).objects);
   const lib = loadLibrary(ex.size);
   const t0 = performance.now();
-  const { scene, diagnostics } = layoutWithDiagnostics({ objects, format: ex.format, size: ex.size, variant: ex.variant }, lib);
+  // Laid out with the L geometry: an S composition is the L one with the S pieces.
+  const laid = layoutWithDiagnostics({ objects, format: ex.format, size: 'L', variant: ex.variant }, loadLibrary('L'));
+  const diagnostics = laid.diagnostics;
+  const scene = convertSceneSize(laid.scene, lib);
   const ms = performance.now() - t0;
   const scheme = SCHEMES.find((s) => s.id === ex.scheme)!;
   writeFileSync(join(OUT, ex.file), sceneToSvg(scene, lib, scheme.colors, { title: ex.phrase }));

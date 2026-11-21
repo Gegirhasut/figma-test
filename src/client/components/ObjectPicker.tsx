@@ -5,7 +5,7 @@ import { defaultTint } from '../../shared/layout';
 import { resolveMarkup, tintPalette } from '../../shared/palette';
 import type { LibraryData, Palette } from '../../shared/types';
 
-const Thumb = memo(function Thumb({ id, lib, palette }: { id: ObjectId; lib: LibraryData; palette: Palette }) {
+export const Thumb = memo(function Thumb({ id, lib, palette }: { id: ObjectId; lib: LibraryData; palette: Palette }) {
   const f = lib.objects[id].main;
   const html = resolveMarkup(f.markup, tintPalette(palette, defaultTint(lib, id, 'main')));
   return <svg viewBox={`${f.x} ${f.y} ${f.w} ${f.h}`} aria-hidden="true" dangerouslySetInnerHTML={{ __html: html }} />;

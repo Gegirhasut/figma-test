@@ -62,7 +62,7 @@ export interface PaletteParseResult {
  * top→bottom (accent 1, accent 2, accent 3, white). With 6 colours the contour
  * and white keep their default values.
  */
-export function parsePalette(text: string, base: Palette = DEFAULT_SCHEME.colors): PaletteParseResult {
+export function parsePalette(text: string, base: Palette = DEFAULT_SCHEME.colors, opts: { validate?: boolean } = {}): PaletteParseResult {
   const trimmed = text.trim();
   if (!trimmed) return { error: 'Пустая палитра' };
   let list: string[] | null = null;
@@ -109,8 +109,13 @@ export function parsePalette(text: string, base: Palette = DEFAULT_SCHEME.colors
   } else {
     return { error: 'Не удалось прочитать палитру' };
   }
-  const err = validatePalette(palette);
+  const err = opts.validate === false ? null : validatePalette(palette);
   return err ? { error: err } : { palette };
+}
+
+/** Object roles whose colour equals a background colour (forbidden by the scheme rules). */
+export function conflictingRoles(p: Palette): Role[] {
+  return OBJ_ROLES.filter((o) => BG_ROLES.some((b) => p[o].toUpperCase() === p[b].toUpperCase()));
 }
 
 /**

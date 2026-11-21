@@ -1,6 +1,6 @@
-import { memo, useEffect, useId, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
+import { memo, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from 'react';
 import { paletteKey, resolveMarkup } from '../../shared/palette';
-import { decorPlacements, decorStyle, itemFragment, itemMarkup, itemPalette, itemTransform, objectLabel } from '../../shared/render';
+import { decorPlacements, decorStyle, itemFragment, itemMarkup, itemPalette, itemTransform, objectLabel, pieceScale } from '../../shared/render';
 import type { LibraryData, Palette, Scene, SceneItem } from '../../shared/types';
 
 const markupCache = new Map<string, string>();
@@ -43,6 +43,8 @@ export interface SceneViewProps {
   onMoveEnd?: () => void;
   /** Objects glide into place once on mount. */
   intro?: boolean;
+  /** The objects present on mount drop in one by one (CSS only; remount to replay). */
+  dropIn?: boolean;
   /** Reports the screen box of the selected object (for the floating toolbar). */
   onSelectionBox?: (box: DOMRect | null) => void;
   className?: string;
@@ -56,7 +58,14 @@ function easeOutCubic(t: number) {
 }
 
 export function SceneView(props: SceneViewProps) {
-  const { scene, lib, palette, interactive, selected, onSelect, onMove, onMoveEnd, intro, onSelectionBox, className, label } = props;
+  const { scene, lib, palette, interactive, selected, onSelect, onMove, onMoveEnd, intro, dropIn, onSelectionBox, className, label } = props;
+  /** Objects that drop in: the ones the scene had when it was mounted (later duplicates just appear). */
+  const dropUids = useRef<Map<string, number> | null>(null);
+  if (dropIn && !dropUids.current) dropUids.current = new Map(scene.items.map((it, i) => [it.uid, i]));
+  const [, setDropsLeft] = useState(0);
+  const finishDrop = (uid: string) => {
+    if (dropUids.current?.delete(uid)) setDropsLeft(dropUids.current.size);
+  };
   const svgRef = useRef<SVGSVGElement>(null);
   const clipId = 'clip' + useId().replace(/[^a-zA-Z0-9]/g, '');
   const drag = useRef<{ uid: string; dx: number; dy: number; id: number } | null>(null);
@@ -112,11 +121,21 @@ export function SceneView(props: SceneViewProps) {
     }
   };
 
-  // Report where the selected object is on screen.
+  // Report where the selected object is on screen. A layout effect runs before the browser paints, so the
+  // floating toolbar is placed next to the object in the same frame instead of flashing at the canvas corner.
   const selRef = useRef<SVGPolygonElement | null>(null);
-  useEffect(() => {
+  // Last reported box. The effect runs after every render, so it reports only real changes; otherwise the
+  // parent's state update would re-render this view and report again, forever.
+  const lastBox = useRef<string>('');
+  useLayoutEffect(() => {
     if (!onSelectionBox) return;
-    const report = () => onSelectionBox(selRef.current ? selRef.current.getBoundingClientRect() : null);
+    const report = () => {
+      const box = selRef.current ? selRef.current.getBoundingClientRect() : null;
+      const key = box ? [box.left, box.top, box.width, box.height].map((v) => Math.round(v)).join(',') : '';
+      if (key === lastBox.current) return;
+      lastBox.current = key;
+      onSelectionBox(box);
+    };
     report();
     window.addEventListener('resize', report);
     window.addEventListener('scroll', report, true);
@@ -132,7 +151,7 @@ export function SceneView(props: SceneViewProps) {
   return (
     <svg
       ref={svgRef}
-      className={className}
+      className={dropIn ? `${className ?? ''} demo-anim` : className}
       viewBox={`0 0 ${scene.width} ${scene.height}`}
       role="img"
       aria-label={label ?? 'Композиция'}
@@ -162,7 +181,8 @@ export function SceneView(props: SceneViewProps) {
             opacity = Math.min(1, t * 1.6);
           }
           const isSel = interactive && selected === item.uid;
-          return (
+          const dropAt = dropUids.current?.get(item.uid);
+          const art = (
             <g
               key={item.uid}
               transform={transform}
@@ -181,18 +201,36 @@ export function SceneView(props: SceneViewProps) {
                 />
               )}
               {isSel && (
+                // A plain outline, no handles: objects are moved, never resized (proportions are fixed by the TZ).
                 <g pointerEvents="none" className="selection">
-                  <rect x={f.x} y={f.y} width={f.w} height={f.h} fill="none" vectorEffect="non-scaling-stroke" />
-                  {[
-                    [f.x, f.y],
-                    [f.x + f.w, f.y],
-                    [f.x, f.y + f.h],
-                    [f.x + f.w, f.y + f.h],
-                  ].map(([x, y], k) => (
-                    <circle key={k} cx={x} cy={y} r={7 / scene.scale} className="handle" vectorEffect="non-scaling-stroke" />
-                  ))}
+                  {/* The rect lives in the piece's own units, which are drawn at pieceScale (S pieces carry their
+                      detail factor), so padding and radius are divided by it to look the same for S and L. */}
+                  <rect
+                    x={f.x - 10 / pieceScale(f, scene.scale)}
+                    y={f.y - 10 / pieceScale(f, scene.scale)}
+                    width={f.w + 20 / pieceScale(f, scene.scale)}
+                    height={f.h + 20 / pieceScale(f, scene.scale)}
+                    rx={14 / pieceScale(f, scene.scale)}
+                    fill="none"
+                    vectorEffect="non-scaling-stroke"
+                  />
                 </g>
               )}
+            </g>
+          );
+          // The wrapper is always rendered so the element is never remounted. Its drop class is removed
+          // once the drop has played: reordering layers moves the DOM node, and a node that still carries
+          // the class would replay the animation and "jump" out of the scene.
+          return (
+            <g
+              key={item.uid}
+              className={dropAt === undefined ? undefined : 'demo-drop'}
+              style={dropAt === undefined ? undefined : { animationDelay: `${260 + dropAt * 170}ms` }}
+              onAnimationEnd={
+                dropAt === undefined ? undefined : (e) => e.target === e.currentTarget && finishDrop(item.uid)
+              }
+            >
+              {art}
             </g>
           );
         })}

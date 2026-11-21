@@ -3,6 +3,7 @@
 //
 //   npm run checks                 the default set below
 //   npm run checks -- --all        also every variant 0–7 of each case
+//   npm run checks -- --demo       the fixed phrase sets of the home page (demo and chips)
 //
 // PNGs are made with headless Chrome/Edge if one is installed; otherwise only
 // the SVGs are written.
@@ -18,6 +19,7 @@ import { interpretByTags, matchObjects } from '../src/shared/matcher';
 import { SCHEMES } from '../src/shared/palette';
 import { sceneToSvg } from '../src/shared/render';
 import type { Format, ObjectRequest, Size } from '../src/shared/types';
+import { FIXED_SETS } from '../src/client/demo-examples';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'build', 'checks');
@@ -30,9 +32,10 @@ interface Check {
   scheme: string;
   /** What the LLM returned for the phrase in the app, when the dictionary would pick something else. */
   objects?: ObjectRequest[];
+  variant?: number;
 }
 
-const CHECKS: Check[] = [
+const DEFAULT_CHECKS: Check[] = [
   {
     name: 'koplyu-na-opus-peach-vertical-L',
     phrase: 'коплю на Opus',
@@ -60,6 +63,18 @@ const CHECKS: Check[] = [
   { name: 'kopim-na-otpusk-lilac-square-L', phrase: 'копим на отпуск', format: 'square', size: 'L', scheme: 'lilac' },
   { name: 'naushniki-telefon-kniga-na-fone-teal-horizontal-S', phrase: 'наушники, телефон, книга на фоне', format: 'horizontal', size: 'S', scheme: 'teal' },
 ];
+
+const DEMO_CHECKS: Check[] = FIXED_SETS.map((e, k) => ({
+  name: `fixed-set-${k + 1}-${e.scheme}-${e.format}`,
+  phrase: e.phrase,
+  format: e.format,
+  size: 'L',
+  scheme: e.scheme,
+  objects: e.objects,
+  variant: e.variant,
+}));
+
+const CHECKS = process.argv.includes('--demo') ? DEMO_CHECKS : DEFAULT_CHECKS;
 
 function browser(): string | null {
   const candidates = [
@@ -100,7 +115,7 @@ try {
     const objects = c.objects ?? (dict.mode === 'objects' ? dict.objects : interpretByTags(c.phrase).objects);
     const lib = loadLibrary(c.size);
     const scheme = SCHEMES.find((s) => s.id === c.scheme)!;
-    for (const variant of all ? [0, 1, 2, 3, 4, 5, 6, 7] : [0]) {
+    for (const variant of all ? [0, 1, 2, 3, 4, 5, 6, 7] : [c.variant ?? 0]) {
       const { scene, diagnostics } = layoutWithDiagnostics({ objects, format: c.format, size: c.size, variant }, lib);
       const base = join(OUT, all ? `${c.name}-v${variant}` : c.name);
       writeFileSync(base + '.svg', sceneToSvg(scene, lib, scheme.colors, { title: c.phrase }));

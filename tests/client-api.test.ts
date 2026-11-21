@@ -16,7 +16,8 @@ describe('notes shown to the user', () => {
 
   it('says how many AI requests are left and when they come back', () => {
     const now = new Date(2026, 10, 20, 10, 0).getTime();
-    expect(answerNote({ objects: [], source: 'anthropic', aiLeft: 2, aiLimit: 3 }, now)).toBe('Фразу разобрал AI. Осталось AI-запросов: 2 из 3 на сутки');
+    // The quota left is shown next to the input, not as a message.
+    expect(answerNote({ objects: [], source: 'anthropic', aiLeft: 2, aiLimit: 3 }, now)).toBe('');
     const at = new Date(2026, 10, 21, 9, 30).getTime();
     const limited = answerNote({ objects: [], source: 'dictionary', aiLeft: 0, limited: true, aiResetAt: at }, now);
     expect(limited).toMatch(/Лимит AI-запросов на сутки исчерпан/);
@@ -43,6 +44,7 @@ describe('interpretPhrase', () => {
     expect(Date.now() - t0).toBeLessThan(1000);
     expect(r.source).toBe('offline');
     expect(r.note).toMatch(/не ответил вовремя/);
+    expect(r.problem).toBe('timeout');
     expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
   });
 

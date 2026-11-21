@@ -40,6 +40,7 @@ const TARGET_COVERAGE = 0.32;
 const MIN_SCALE = 0.3;
 const MAX_SCALE = 1.3;
 
+
 type Slot = [number, number];
 
 const MAIN_TEMPLATES: Record<number, Slot[][]> = {
@@ -155,10 +156,13 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
 
   const bodies: Body[] = reqs.map((r, idx) => {
     const f = lib.objects[r.id][r.role];
-    const hull = orient(f.hull);
-    const body = orient(f.body ?? f.hull);
+    // S pieces in L units (their detail factor), so a scene scale means the same for S and L.
+    const d = f.detail ?? 1;
+    const up = (p: Pt) => ({ x: p.x * d, y: p.y * d });
+    const hull = orient(f.hull.map(up));
+    const body = orient((f.body ?? f.hull).map(up));
     return {
-      idx, id: r.id, role: r.role, w: f.w, h: f.h, hull, hullArea: Math.abs(polygonArea(hull)),
+      idx, id: r.id, role: r.role, w: f.w * d, h: f.h * d, hull, hullArea: Math.abs(polygonArea(hull)),
       body, bodyArea: Math.abs(polygonArea(body)), base: Math.max(...body.map((p) => p.y)),
       x: 0, y: 0, ax: 0, ay: 0,
     };
@@ -168,10 +172,12 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
   const sizing = mains.length ? mains : bgs;
   const area = sizing.reduce((s, b) => s + b.hullArea, 0) || 1;
   // Background-only scenes are sized like a main scene of the same objects.
-  let scale = clamp(Math.sqrt((TARGET_COVERAGE * W * H) / area), MIN_SCALE, MAX_SCALE);
+  const minScale = MIN_SCALE;
+  const maxScale = MAX_SCALE;
+  let scale = clamp(Math.sqrt((TARGET_COVERAGE * W * H) / area), minScale, maxScale);
   // Many objects: leave room by targeting a little less coverage per object.
   if (mains.length > 3) scale *= Math.sqrt(3 / mains.length) ** 0.5;
-  scale = clamp(scale, MIN_SCALE, MAX_SCALE);
+  scale = clamp(scale, minScale, maxScale);
 
   const mirror = Math.floor(variant / 2) % 2 === 1;
   const alt = Math.floor(variant / 4) % 2;
@@ -185,7 +191,7 @@ export function layoutWithDiagnostics(input: LayoutInput, lib: LibraryData, uidP
   const shifts = bgOrder.length && mainOrder.length ? BG_SLOTS.length : 1;
   attempts: for (let attempt = 0; attempt < 7; attempt++) {
    for (let shift = 0; shift < shifts; shift++) {
-    const s = clamp(scale * Math.pow(0.88, attempt), MIN_SCALE, MAX_SCALE);
+    const s = clamp(scale * Math.pow(0.88, attempt), minScale, maxScale);
     const state = bodies.map((b) => ({ ...b }));
     const byIdx = new Map(state.map((b) => [b.idx, b]));
     mainOrder.forEach((b, i) => {
@@ -293,6 +299,13 @@ function evaluate(state: Body[], ctx: Ctx): { total: number; hard: number } {
   state.forEach((b, i) => {
     if (b.role === 'main') {
       mainIdx.push(i);
+      if (b.h * ctx.s > ctx.H * TALL_SHARE) {
+        // A tall object (the lamp) may only be cropped from below: its upper half —
+        // the lamp head and most of the arm — stays inside the frame.
+        const upper = upperHalf(hulls[i]);
+        const upperArea = Math.abs(polygonArea(upper));
+        if (upperArea > 0) hard += 8 * Math.max(0, UPPER_VISIBLE - intersectionArea(upper, ctx.frame) / upperArea);
+      }
       if (b.idx === ctx.croppable) {
         const vis = intersectionArea(hulls[i], ctx.frame) / areas[i];
         hard += 6 * Math.max(0, 0.62 - vis);
@@ -347,6 +360,23 @@ function evaluate(state: Body[], ctx: Ctx): { total: number; hard: number } {
   }
   for (const b of state) soft += 0.5 * (Math.hypot(b.x - b.ax, b.y - b.ay) / ctx.diag);
   return { total: hard + soft, hard };
+}
+
+/** A main object taller than this share of the frame counts as tall… */
+const TALL_SHARE = 0.45;
+/** …and keeps at least this share of its upper half inside the frame. */
+const UPPER_VISIBLE = 0.995;
+
+/** Part of a convex footprint above its vertical middle. */
+function upperHalf(hull: Pt[]): Pt[] {
+  let minY = Infinity, maxY = -Infinity;
+  for (const p of hull) {
+    minY = Math.min(minY, p.y);
+    maxY = Math.max(maxY, p.y);
+  }
+  const mid = (minY + maxY) / 2;
+  const big = 1e6;
+  return clipConvex(hull, rectPolygon(-big, minY - 1, 2 * big, mid - minY + 1));
 }
 
 function centroid(p: Pt[]): Pt {
@@ -455,8 +485,19 @@ function diagnostics(state: Body[], ctx: Ctx): Omit<LayoutDiagnostics, 'scale' |
 // Size switch keeps the user's arrangement: S fragments are the L ones at half
 // size in a half-size frame, so positions scale with the frame.
 
+/**
+ * A composition for `target` laid out with the L geometry, so S and L scenes of
+ * the same request are identical (same scene scale, same positions); only the
+ * pieces differ.
+ */
+export function layoutSceneFor(input: LayoutInput, libL: LibraryData, target: LibraryData, uidPrefix = 'o'): Scene {
+  return convertSceneSize(layoutScene({ ...input, size: 'L' }, libL, uidPrefix), target);
+}
+
 export function convertSceneSize(scene: Scene, target: LibraryData): Scene {
   if (scene.size === target.size) return scene;
+  // Same frame, same scene scale and same drawn size for S and L: positions, moves
+  // and rotations stay exactly; only the pieces (level of detail) change.
   const f = target.frames[scene.format];
   const k = f.w / scene.width;
   return {

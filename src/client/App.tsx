@@ -1,26 +1,29 @@
 import { ArrowDown, ArrowUp, Copy, Download, Layers, Palette as PaletteIcon, RotateCw, Trash2 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { CATALOG_BY_ID, type ObjectId } from '../shared/catalog';
-import { convertSceneSize, defaultTint, layoutScene, sceneRequests } from '../shared/layout';
-import { matchObjects } from '../shared/matcher';
+import { convertSceneSize, defaultTint, layoutSceneFor, sceneRequests } from '../shared/layout';
 import { DEFAULT_SCHEME, SCHEMES } from '../shared/palette';
 import { sceneToSvg } from '../shared/render';
 import type { Format, LibraryData, ObjectRequest, Palette, Scene, SceneItem, Size } from '../shared/types';
-import { interpretPhrase } from './api';
-import { ObjectPicker } from './components/ObjectPicker';
+import { fetchAiStatus, interpretPhrase, type Interpretation } from './api';
 import { PaletteDialog } from './components/PaletteDialog';
 import { SceneView } from './components/SceneView';
+import { DemoFrame, useHomeDemo } from './components/HomeDemo';
+import { FirstResultHint } from './components/Hints';
+import { LibraryStrip } from './components/LibraryStrip';
+import { CHIPS, LIST_CHIPS, takeFirstHint, type Chip } from './onboarding';
+import { addBlocker, addObject, clampInside, clearScene, insertByDepth, removeLatest, roleForNew, switchSize } from '../shared/place';
+import { DEMO_EXAMPLE, findFixedSet, type DemoExample } from './demo-examples';
 import { libraryIfReady, loadLibrary } from './library';
 
-const DEMO_PHRASE = 'Кошелёк, монета';
-const PLACEHOLDER = 'Например, «копим на отпуск»';
+const PLACEHOLDER = 'Например, «Вечер с книгой»';
 
 /** What the S/L switch does (both are the client's library, S is the simplified set for small sizes). */
 const SIZE_HINT: Record<Size, string> = {
-  S: 'Упрощённые объекты для маленьких размеров',
-  L: 'Подробные объекты для крупных размеров',
+  S: 'Простые объекты — для маленьких картинок',
+  L: 'Подробные объекты — для больших картинок',
 };
-const SIZE_HINT_ALL = 'S — упрощённые объекты для маленьких размеров, L — подробные для крупных';
+const SIZE_HINT_ALL = 'S — простые объекты для маленьких картинок (превью, карточки), L — подробные для больших (обложки, баннеры)';
 
 const FORMATS: { id: Format; label: string }[] = [
   { id: 'square', label: 'Квадрат' },
@@ -79,47 +82,115 @@ export default function App() {
   const [lib, setLib] = useState<LibraryData | null>(() => libraryIfReady('L') ?? null);
   const [selected, setSelected] = useState<string | null>(null);
   const [selBox, setSelBox] = useState<DOMRect | null>(null);
-  const [picker, setPicker] = useState(false);
   const [paletteDialog, setPaletteDialog] = useState(false);
-  const [demo, setDemo] = useState<Scene | null>(null);
+  /** What went wrong with the last phrase (limit, timeout, offline), to offer the next step. */
+  const [problem, setProblem] = useState<Interpretation['problem']>();
+  /** AI quota of this browser; shown once at least one AI request was used. */
+  const [ai, setAi] = useState<{ left: number; limit: number } | null>(null);
+  /** Bumped per result: the canvas re-mounts and its objects drop in. */
+  const [dropKey, setDropKey] = useState(0);
+  /** The one-time hint after the first result. */
+  const [hint, setHint] = useState(false);
+  const hintTaken = useRef(false);
+  const [demoFailed, setDemoFailed] = useState(false);
+  /** The L library for the home-page demo. */
+  const [demoLib, setDemoLib] = useState<LibraryData | null>(() => libraryIfReady('L') ?? null);
   /** Object order as the user named them, for the «Использованы» line. */
   const [order, setOrder] = useState<ObjectId[]>([]);
   const isPhone = useMedia('(max-width: 640px)');
   const canvasWrap = useRef<HTMLDivElement>(null);
 
-  const palette: Palette = schemeId === 'custom' && custom ? custom : (SCHEMES.find((s) => s.id === schemeId) ?? DEFAULT_SCHEME).colors;
+  const applied: Palette = schemeId === 'custom' && custom ? custom : (SCHEMES.find((s) => s.id === schemeId) ?? DEFAULT_SCHEME).colors;
+  /** Live preview from the palette dialog, shown on the canvas until applied or closed. */
+  const [palettePreview, setPalettePreview] = useState<Palette | null>(null);
+  const palette = palettePreview ?? applied;
 
-  // First screen: the demo is a real composition from the real engine.
+  // First screen: the demo builds a real composition with the real engine.
   useEffect(() => {
-    loadLibrary('L').then((l) => {
-      setLib((cur) => cur ?? l);
-      setDemo(layoutScene({ objects: matchObjects(DEMO_PHRASE).objects, format: 'horizontal', size: 'L' }, l, 'demo'));
-    });
+    loadLibrary('L')
+      .then((l) => {
+        setLib((cur) => cur ?? l);
+        setDemoLib(l);
+      })
+      // Without the library there is nothing to show: the demo block is hidden, the input still works.
+      .catch(() => setDemoFailed(true));
   }, []);
+  useEffect(() => {
+    fetchAiStatus().then((st) => st && st.aiConfigured && setAi({ left: st.aiLeft, limit: st.aiLimit }));
+  }, []);
+  const demo = useHomeDemo(phase === 'home' ? demoLib : null);
+  const stopDemo = demo.stop;
+  /** The demo is typing, or its phrase still stands in the input. */
+  const demoOn = demo.active || demo.ghost !== '';
+  // Anything the visitor does stops the demo for good.
+  useEffect(() => {
+    if (!demoOn) return;
+    window.addEventListener('pointerdown', stopDemo, true);
+    window.addEventListener('keydown', stopDemo, true);
+    return () => {
+      window.removeEventListener('pointerdown', stopDemo, true);
+      window.removeEventListener('keydown', stopDemo, true);
+    };
+  }, [demoOn, stopDemo]);
 
+  /** `example`: a demo example with its fixed objects, scheme and format (no AI request). */
   const generate = useCallback(
-    async (text: string) => {
+    async (text: string, example?: DemoExample, keepLook = false) => {
       const p = text.trim();
       if (!p || busy) return;
       setBusy(true);
       try {
-        const [interp, l] = await Promise.all([interpretPhrase(p), loadLibrary(size)]);
-        const s = relabel(layoutScene({ objects: interp.objects, format, size, variant: 0 }, l));
+        // keepLook: a fixed phrase typed by hand keeps the user's current format and colours; the example's
+        // tuned variant is used only in the format it was tuned for.
+        const f = example && !keepLook ? example.format : format;
+        const v = example && example.format === f ? example.variant : 0;
+        const [interp, l, libL] = await Promise.all([
+          example ? Promise.resolve({ objects: example.objects, note: '' }) : interpretPhrase(p),
+          loadLibrary(size),
+          loadLibrary('L'),
+        ]);
+        // Laid out with the L geometry, so S and L compositions are identical apart from the pieces.
+        const s = relabel(layoutSceneFor({ objects: interp.objects, format: f, size, variant: v }, libL, l));
+        if (example && !keepLook) {
+          setFormat(f);
+          setSchemeId(example.scheme);
+        }
         setLib(l);
         setScene(s);
         setOrder(interp.objects.map((o) => o.id));
-        setVariant(0);
+        setVariant(v);
         setPhrase(p);
         setInput(p);
         setNote(interp.note);
+        setProblem((interp as Partial<Interpretation>).problem);
+        const quota = interp as Partial<Interpretation>;
+        if (quota.aiLeft !== undefined && quota.aiLimit) setAi({ left: quota.aiLeft, limit: quota.aiLimit });
+        setDropKey((k) => k + 1);
         setSelected(null);
         setPhase('editor');
+        // First result in this browser: one hint, once the objects have dropped in.
+        if (!hintTaken.current) {
+          hintTaken.current = true;
+          if (takeFirstHint()) setTimeout(() => setHint(true), 1400);
+        }
         window.scrollTo({ top: 0 });
       } finally {
         setBusy(false);
       }
     },
     [busy, format, size],
+  );
+  const runChip = (c: Chip) => generate(c.phrase, c.example);
+  const closeHint = useCallback(() => setHint(false), []);
+  const aiLeftLine = ai && ai.left < ai.limit ? <p className="ai-left">Осталось AI-запросов: {ai.left} из {ai.limit}</p> : null;
+  const chipRow = (chips: Chip[], label: string) => (
+    <div className="chips" role="group" aria-label={label}>
+      {chips.map((c) => (
+        <button key={c.phrase} type="button" className="chip" onClick={() => runChip(c)} disabled={busy}>
+          {c.phrase}
+        </button>
+      ))}
+    </div>
   );
 
   const onSubmit = (e: FormEvent) => {
@@ -129,12 +200,15 @@ export default function App() {
       (e.currentTarget as HTMLFormElement).querySelector('input')?.focus();
       return;
     }
-    generate(input);
+    // The same phrase must give the same picture: an example phrase typed by hand (or re-submitted from the
+    // editor) uses the example's fixed objects and layout, as its chip does, instead of a fresh interpretation.
+    const fixed = findFixedSet(input);
+    generate(input, fixed, phase === 'editor');
   };
 
   // ---- scene editing ----
   const relayout = (objects: ObjectRequest[], tints: number[] | undefined, f: Format, v: number, l: LibraryData) => {
-    setScene(relabel(layoutScene({ objects, tints, format: f, size: l.size, variant: v }, l)));
+    setScene(relabel(layoutSceneFor({ objects, tints, format: f, size: l.size, variant: v }, libraryIfReady('L') ?? l, l)));
     setSelected(null);
   };
 
@@ -144,21 +218,15 @@ export default function App() {
   const actions = {
     rotate: () => sel && update((items) => items.map((i) => (i.uid === sel.uid ? { ...i, rotation: (i.rotation + 15) % 360 } : i))),
     duplicate: () => {
-      if (!sel || !scene || scene.items.length >= 8) return;
-      const copy: SceneItem = {
-        ...sel,
-        uid: newUid(),
-        x: Math.min(scene.width, sel.x + scene.width * 0.06),
-        y: Math.min(scene.height, sel.y + scene.height * 0.06),
-      };
-      update((items) => {
-        const k = items.findIndex((i) => i.uid === sel.uid);
-        return [...items.slice(0, k + 1), copy, ...items.slice(k + 1)];
-      });
+      if (!sel || !scene || !lib || addBlocker(scene.items, sel.id)) return;
+      // Same limits as the strip; the copy stays whole inside the frame and takes its place by depth.
+      const shifted: SceneItem = { ...sel, uid: newUid(), x: sel.x + scene.width * 0.06, y: sel.y + scene.height * 0.06 };
+      const copy = { ...shifted, ...clampInside(shifted, lib, scene) };
+      update((items) => insertByDepth(items, copy, lib, scene.scale));
       setSelected(copy.uid);
     },
     remove: () => {
-      if (!sel || !scene || scene.items.length <= 1) return;
+      if (!sel || !scene) return;
       update((items) => items.filter((i) => i.uid !== sel.uid));
       setSelected(null);
     },
@@ -240,7 +308,11 @@ export default function App() {
     const l = await loadLibrary(s);
     if (req !== sizeRequest.current) return;
     setLib(l);
-    setScene((cur) => (cur ? convertSceneSize(cur, l) : cur));
+    setScene((cur) => {
+      if (!cur) return cur;
+      const from = libraryIfReady(cur.size);
+      return from ? switchSize(cur, from, l) : convertSceneSize(cur, l);
+    });
   };
 
   const nextVariant = () => {
@@ -257,29 +329,51 @@ export default function App() {
     return c;
   }, [scene]);
 
-  const changeCount = (id: ObjectId, delta: 1 | -1) => {
+  /** Adds one object without touching the others: on a free spot, or at the drop point (frame units). */
+  const addItem = (id: ObjectId, at?: { x: number; y: number }) => {
     if (!scene || !lib) return;
-    const r = sceneRequests(scene);
-    const objects = [...r.objects];
-    const tints = [...r.tints];
-    if (delta > 0) {
-      if (objects.length >= 8) return;
-      const mains = objects.filter((o) => o.role === 'main').length;
-      objects.push({ id, role: mains >= 4 ? 'background' : 'main' });
-      if (!order.includes(id)) setOrder([...order, id]);
-      tints.push(defaultTint(lib, id, mains >= 4 ? 'background' : 'main'));
-    } else {
-      if (objects.length <= 1) return;
-      const k = objects.map((o) => o.id).lastIndexOf(id);
-      if (k < 0) return;
-      objects.splice(k, 1);
-      tints.splice(k, 1);
-    }
-    relayout(objects, tints, scene.format, variant, lib);
+    const uid = newUid();
+    const next = addObject(scene, lib, { uid, id, tint: defaultTint(lib, id, roleForNew(scene.items)) }, at, libraryIfReady('L') ?? lib);
+    if (!next) return;
+    setScene(next);
+    if (!order.includes(id)) setOrder([...order, id]);
+    setSelected(uid);
   };
+  const dropItem = (id: ObjectId, clientX: number, clientY: number) => {
+    const svg = canvasWrap.current?.querySelector('svg');
+    const m = svg?.getScreenCTM();
+    if (!m) return;
+    const p = new DOMPoint(clientX, clientY).matrixTransform(m.inverse());
+    addItem(id, { x: p.x, y: p.y });
+  };
+  /** «−» on a thumbnail: the copy added last goes; the rest stays in place. */
+  const removeOne = (id: ObjectId) => {
+    if (!scene) return;
+    setScene({ ...scene, items: removeLatest(scene.items, id) });
+    setSelected(null);
+  };
+  const blocker = useCallback((id: ObjectId) => (scene ? addBlocker(scene.items, id) : null), [scene]);
+  /** Objects removed by «Очистить», for «Вернуть» while the canvas is still empty. */
+  const [cleared, setCleared] = useState<SceneItem[] | null>(null);
+  const clearAll = () => {
+    if (!scene || !scene.items.length) return;
+    setCleared(scene.items);
+    setScene(clearScene(scene));
+    setSelected(null);
+  };
+  const restoreCleared = () => {
+    if (!scene || !cleared || scene.items.length) return;
+    setScene({ ...scene, items: cleared });
+    setCleared(null);
+  };
+  const empty = !!scene && scene.items.length === 0;
+  // «Вернуть» only makes sense until something new is on the canvas.
+  useEffect(() => {
+    if (scene?.items.length) setCleared(null);
+  }, [scene?.items.length]);
 
   const download = () => {
-    if (!scene || !lib) return;
+    if (!scene || !lib || !scene.items.length) return;
     const svg = sceneToSvg(scene, lib, palette, { title: phrase });
     const blob = new Blob([svg], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
@@ -310,20 +404,49 @@ export default function App() {
         </header>
         <main className="hero">
           <h1>Иллюстрация из&nbsp;одной фразы</h1>
-          <p className="lead">Опишите идею или перечислите объекты. Мы&nbsp;соберём композицию из&nbsp;готовых векторных элементов</p>
+          <p className="lead">Опишите идею&nbsp;— соберём иллюстрацию из&nbsp;готовых объектов</p>
           <form className="prompt" onSubmit={onSubmit}>
-            <input value={input} onChange={(e) => setInput(e.target.value)} placeholder={PLACEHOLDER} aria-label="Идея или список объектов" maxLength={200} />
-            <button className="btn" type="submit" disabled={busy}>
+            <div className="prompt-field">
+              <input
+                value={input}
+                onChange={(e) => {
+                  stopDemo();
+                  setInput(e.target.value);
+                }}
+                placeholder={demoOn ? '' : PLACEHOLDER}
+                aria-label="Идея или список объектов"
+                maxLength={200}
+              />
+              {demoOn && (
+                <span className="ghost" aria-hidden="true">
+                  {demo.ghost}
+                  {demo.typing && <span className="caret" />}
+                </span>
+              )}
+            </div>
+            <button className={`btn${demo.pressing ? ' pressing' : ''}`} type="submit" disabled={busy}>
               {busy ? 'Собираем…' : 'Создать иллюстрацию'}
             </button>
           </form>
-          <p className="demo-caption">«{DEMO_PHRASE}» → готовая иллюстрация</p>
-          <div className="demo-frame">
-            {demo && lib ? <SceneView scene={demo} lib={lib} palette={DEFAULT_SCHEME.colors} intro label={`Пример: ${DEMO_PHRASE}`} className="scene" /> : <div className="scene placeholder" />}
-          </div>
-          <button className="link-btn demo-link" onClick={() => generate(DEMO_PHRASE)} disabled={busy}>
-            Попробовать этот пример
-          </button>
+          {aiLeftLine}
+          {chipRow(CHIPS, 'Примеры запросов')}
+          {!demoFailed && <DemoFrame lib={demoLib} scene={demo.scene} example={DEMO_EXAMPLE} built={demo.built && !busy} animate={demo.animate} />}
+          {demoFailed ? null : busy ? (
+            <p className="demo-caption loading" aria-live="polite">
+              Подбираем объекты и собираем композицию…
+            </p>
+          ) : (
+            <button
+              className="link-btn demo-link"
+              onClick={() => generate(DEMO_EXAMPLE.phrase, DEMO_EXAMPLE)}
+              disabled={busy || !demo.built}
+              // Hidden (space kept, so nothing jumps) until the demo composition has appeared.
+              style={demo.built ? undefined : { visibility: 'hidden' }}
+              aria-hidden={!demo.built}
+            >
+              Попробовать этот пример
+            </button>
+          )}
         </main>
       </div>
     );
@@ -334,7 +457,12 @@ export default function App() {
       <button onClick={actions.rotate} title="Повернуть на 15°" aria-label="Повернуть">
         <RotateCw size={20} />
       </button>
-      <button onClick={actions.duplicate} title="Дублировать" aria-label="Дублировать" disabled={(scene?.items.length ?? 0) >= 8}>
+      <button
+        onClick={actions.duplicate}
+        title={(scene && addBlocker(scene.items, sel.id)) || 'Дублировать'}
+        aria-label="Дублировать"
+        disabled={!scene || !!addBlocker(scene.items, sel.id)}
+      >
         <Copy size={20} />
       </button>
       <button onClick={actions.forward} title="Выше по слоям" aria-label="Выше по слоям">
@@ -349,7 +477,7 @@ export default function App() {
       <button onClick={actions.recolor} title="Другие цвета схемы" aria-label="Перекрасить" disabled={sel.role !== 'main'}>
         <PaletteIcon size={20} />
       </button>
-      <button onClick={actions.remove} title="Удалить" aria-label="Удалить" disabled={(scene?.items.length ?? 0) <= 1}>
+      <button onClick={actions.remove} title="Удалить" aria-label="Удалить">
         <Trash2 size={20} />
       </button>
     </div>
@@ -376,12 +504,20 @@ export default function App() {
           </button>
         </form>
       </header>
-      {note && <p className="note">{note}</p>}
+      {aiLeftLine}
+      {note && (
+        <div className="note-box">
+          <p className="note">{note}</p>
+          {(problem === 'limit' || problem === 'timeout' || problem === 'offline') && chipRow(LIST_CHIPS, 'Списки объектов работают без ограничений')}
+        </div>
+      )}
       <div className="editor-grid">
         <section className="canvas-col">
           <div className={`canvas-wrap fmt-${scene?.format}${busy ? ' busy' : ''}`} ref={canvasWrap}>
             {scene && lib && lib.size === scene.size && (
               <SceneView
+                key={dropKey}
+                dropIn
                 scene={scene}
                 lib={lib}
                 palette={palette}
@@ -394,19 +530,40 @@ export default function App() {
                 label={`Композиция: ${phrase}`}
               />
             )}
-            {!isPhone && toolbar && <div className="toolbar-float" style={floating}>{toolbar}</div>}
+            {/* Rendered only once its position is known, so it never appears at the canvas corner first. */}
+            {!isPhone && toolbar && floating && <div className="toolbar-float" style={floating}>{toolbar}</div>}
+            {empty && <p className="canvas-empty">Добавьте объекты снизу — нажмите или перетащите на холст</p>}
           </div>
           <p className="used">
-            Использованы: {usedLine}
-            <span className="dot">•</span>
-            <button className="link-btn" onClick={() => setPicker(true)}>
-              Изменить объекты
-            </button>
-            <span className="dot">•</span>
-            <button className="link-btn" onClick={nextVariant}>
-              Другой вариант
-            </button>
+            {empty ? (
+              <>
+                Пока пусто
+                {cleared && (
+                  <>
+                    <span className="dot">•</span>
+                    <button className="link-btn" onClick={restoreCleared}>
+                      Вернуть
+                    </button>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                Использованы: {usedLine}
+                <span className="dot">•</span>
+                <button className="link-btn" onClick={nextVariant}>
+                  Другой вариант
+                </button>
+                <span className="dot">•</span>
+                <button className="link-btn quiet" onClick={clearAll}>
+                  Очистить
+                </button>
+              </>
+            )}
           </p>
+          {lib && (
+            <LibraryStrip lib={lib} palette={palette} counts={counts} blocker={blocker} dropTarget={canvasWrap} onAdd={addItem} onDrop={dropItem} onRemove={removeOne} />
+          )}
         </section>
         <aside className="settings" aria-label="Настройки">
           <div className="group">
@@ -446,7 +603,14 @@ export default function App() {
                 />
               )}
             </div>
-            <button className="link-btn small" onClick={() => setPaletteDialog(true)}>
+            <button
+              className="link-btn small"
+              onClick={() => {
+                // On a phone the dialog is a bottom sheet: bring the canvas to the top so the live preview stays in view.
+                if (isPhone) canvasWrap.current?.scrollIntoView({ block: 'start' });
+                setPaletteDialog(true);
+              }}
+            >
               Своя палитра
             </button>
           </div>
@@ -464,8 +628,14 @@ export default function App() {
               ))}
             </div>
             {!isPhone && (
-              <p className="size-hint" id="size-hint">
-                {SIZE_HINT[size]}
+              // Both captions share one grid cell and only the current one is visible, so the block is always
+              // as tall as the longer caption and the «Скачать SVG» button below never jumps.
+              <p className="size-hint stacked" id="size-hint">
+                {(['S', 'L'] as const).map((s) => (
+                  <span key={s} aria-hidden={s !== size} style={s === size ? undefined : { visibility: 'hidden' }}>
+                    {SIZE_HINT[s]}
+                  </span>
+                ))}
               </p>
             )}
           </div>
@@ -475,7 +645,7 @@ export default function App() {
             </p>
           )}
           {!isPhone && (
-            <button className="btn wide" onClick={download}>
+            <button className="btn wide" onClick={download} aria-disabled={empty} title={empty ? 'Добавьте хотя бы один объект' : undefined}>
               Скачать SVG
             </button>
           )}
@@ -484,15 +654,16 @@ export default function App() {
       {isPhone && (
         <div className="bottom-bar">
           {toolbar}
-          <button className="btn wide" onClick={download}>
+          <button className="btn wide" onClick={download} aria-disabled={empty} title={empty ? 'Добавьте хотя бы один объект' : undefined}>
             <Download size={18} /> Скачать SVG
           </button>
         </div>
       )}
-      {picker && lib && <ObjectPicker lib={lib} palette={palette} counts={counts} onChange={changeCount} onClose={() => setPicker(false)} />}
+      {hint && <FirstResultHint target={canvasWrap} onClose={closeHint} />}
       {paletteDialog && (
         <PaletteDialog
-          current={palette}
+          current={applied}
+          onPreview={setPalettePreview}
           onApply={(p) => {
             setCustom(p);
             setSchemeId('custom');

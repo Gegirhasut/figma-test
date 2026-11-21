@@ -76,12 +76,17 @@ button:disabled {
   transition: background 0.15s ease;
 }
 
-.btn:hover:not(:disabled) {
+.btn:hover:not(:disabled):not([aria-disabled='true']) {
   background: var(--accent-hover);
 }
 
+.btn[aria-disabled='true'],
 .btn:disabled {
   opacity: 0.7;
+}
+
+.btn[aria-disabled='true'] {
+  cursor: not-allowed;
 }
 
 .btn.wide {
@@ -175,38 +180,388 @@ button:disabled {
   line-height: 1.45;
   color: #3f3c47;
   max-width: 720px;
-  margin: 0 0 44px;
+  margin: 0 0 36px;
 }
 
 .hero .prompt {
   max-width: 900px;
 }
 
-.demo-caption {
-  margin: 44px 0 20px;
-  font-size: 18px;
-  color: #2b2933;
+/* Demo phrase typed into the real input: a ghost value with a caret. */
+.prompt-field {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  display: flex;
 }
 
+.prompt-field input {
+  width: 100%;
+}
+
+.ghost {
+  position: absolute;
+  left: 21.5px;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 18px;
+  line-height: 1.3;
+  color: #4a4654;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.caret {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  margin-left: 1px;
+  vertical-align: -0.2em;
+  background: var(--accent);
+  animation: caret-blink 1s steps(1) infinite;
+}
+
+@keyframes caret-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.btn.pressing {
+  animation: btn-press 0.24s ease-out;
+}
+
+@keyframes btn-press {
+  40% {
+    transform: scale(0.95);
+    background: var(--accent-hover);
+  }
+}
+
+/* The demo frame has the demo's own aspect ratio (set inline): no reserved bands. */
 .demo-frame {
   width: 100%;
   max-width: 820px;
+  margin-top: 36px;
   border-radius: 24px;
   overflow: hidden;
   background: var(--accent-soft);
   box-shadow: 0 1px 0 rgba(22, 21, 26, 0.03);
 }
 
+/* Before the build the frame only keeps its place: nothing decorated, nothing empty-looking. */
+.demo-frame.waiting {
+  background: transparent;
+  box-shadow: none;
+}
+
 .demo-frame .scene,
 .demo-frame .placeholder {
   display: block;
   width: 100%;
-  aspect-ratio: 1200 / 630;
+  height: 100%;
+}
+
+.demo-frame .scene {
+  animation: demo-fade 0.26s ease-out both;
+}
+
+.demo-anim .demo-bg {
+  animation: demo-fade 0.26s ease-out both;
+}
+
+/* Objects fall a little and settle, in paint order (delays set inline). */
+.demo-anim .demo-drop {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: demo-drop 0.56s cubic-bezier(0.3, 0.7, 0.4, 1) both;
+}
+
+@keyframes demo-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-drop {
+  0% {
+    opacity: 0;
+    transform: translateY(-70px);
+  }
+  45% {
+    opacity: 1;
+  }
+  62% {
+    transform: translateY(0) scale(1.02, 0.97);
+  }
+  80% {
+    transform: translateY(-7px) scale(0.995, 1.005);
+  }
+  100% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.demo-caption {
+  margin: 18px 0 0;
+  font-size: 15px;
+  color: #6b6775;
+}
+
+.demo-caption.pending {
+  visibility: hidden;
 }
 
 .demo-link {
-  margin-top: 26px;
+  margin-top: 18px;
   font-size: 18px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .demo-frame .scene,
+  .hint,
+  .demo-anim .demo-drop,
+  .demo-anim .demo-bg,
+  .btn.pressing,
+  .caret {
+    animation: none;
+  }
+}
+
+/* Example chips under the input: one click runs the example. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  max-width: 900px;
+  margin-top: 16px;
+}
+
+.chip {
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: #3f3c47;
+  border-radius: 999px;
+  padding: 7px 14px;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.2;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.chip:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.chip:disabled {
+  opacity: 0.6;
+}
+
+.ai-left {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.demo-caption.loading {
+  color: var(--accent);
+}
+
+/* «Из чего собираем»: what the library can draw. */
+.strip {
+  width: 100%;
+  margin-top: 22px;
+}
+
+.strip-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #3f3c47;
+  margin: 0 0 12px;
+}
+
+.strip-row {
+  display: grid;
+  grid-template-columns: repeat(10, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.strip-item {
+  position: relative;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  color: var(--muted);
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.strip-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  background: none;
+  padding: 8px 4px 6px;
+  font: inherit;
+  color: inherit;
+  cursor: grab;
+  /* Vertical moves drag the object out; horizontal ones still scroll the strip on a phone. */
+  touch-action: pan-x;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.strip-add:active {
+  cursor: grabbing;
+}
+
+.strip-item.blocked .strip-add {
+  cursor: not-allowed;
+  opacity: 0.38;
+}
+
+.strip-count {
+  position: absolute;
+  top: 4px;
+  left: 6px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.strip-remove {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: var(--surface);
+  color: #3f3c47;
+}
+
+.strip-remove:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* The thumbnail under the pointer while dragging it to the canvas. */
+.strip-ghost {
+  position: fixed;
+  left: 0;
+  top: 0;
+  z-index: 80;
+  width: 84px;
+  height: 64px;
+  pointer-events: none;
+  opacity: 0.92;
+  filter: drop-shadow(0 6px 12px rgba(22, 21, 26, 0.25));
+}
+
+.strip-ghost svg {
+  width: 100%;
+  height: 100%;
+}
+
+.canvas-wrap.drop-ready .scene {
+  outline: 2px dashed rgba(120, 100, 215, 0.55);
+  outline-offset: 4px;
+}
+
+.canvas-wrap.drop-over .scene {
+  outline: 2px solid var(--accent);
+}
+
+.strip-item:hover {
+  background: var(--surface);
+}
+
+.strip-thumb {
+  width: 100%;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  opacity: 0.55;
+  filter: saturate(0.6);
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.strip-thumb svg {
+  max-width: 100%;
+  max-height: 100%;
+}
+
+.strip-item:hover .strip-thumb,
+.strip-item.lit .strip-thumb {
+  opacity: 1;
+  filter: none;
+}
+
+.strip-item.lit {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent);
+  transform: translateY(-2px);
+}
+
+.strip-name {
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+/* Notes with a next step (AI limit, timeout, no connection). */
+.note-box .chips {
+  justify-content: flex-start;
+  margin-top: 8px;
+}
+
+/* One-time hints after the first result. */
+.hint {
+  position: fixed;
+  z-index: 61;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: #1f1d24;
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 10px 10px 16px;
+  box-shadow: 0 10px 30px rgba(22, 21, 26, 0.25);
+  animation: demo-fade 0.2s ease-out both;
+}
+
+.hint p {
+  margin: 0;
+  flex: 1;
+  font-size: 14px;
+  line-height: 1.35;
+}
+
+.btn.small {
+  height: 34px;
+  padding: 0 14px;
+  font-size: 14px;
+  border-radius: 9px;
 }
 
 /* ---------- editor ---------- */
@@ -271,6 +626,24 @@ button:disabled {
   transition: opacity 0.2s;
 }
 
+/* Empty canvas: the frame stays, with a calm message in the middle. */
+.canvas-empty {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  padding: 24px;
+  text-align: center;
+  font-size: 15px;
+  color: var(--muted);
+  pointer-events: none;
+}
+
+.link-btn.quiet {
+  color: var(--muted);
+}
+
 .scene-item {
   cursor: grab;
 }
@@ -282,12 +655,7 @@ button:disabled {
 .selection rect {
   stroke: var(--accent);
   stroke-width: 1.5px;
-}
-
-.selection .handle {
-  fill: #fff;
-  stroke: var(--accent);
-  stroke-width: 1.5px;
+  stroke-dasharray: 6 4;
 }
 
 .used {
@@ -453,6 +821,14 @@ button:disabled {
   color: var(--muted);
 }
 
+.size-hint.stacked {
+  display: grid;
+}
+
+.size-hint.stacked > span {
+  grid-area: 1 / 1;
+}
+
 .size-hint.phone {
   /* phones: a short-lived bubble under the settings row after a switch or a long press */
   position: absolute;
@@ -603,17 +979,104 @@ textarea:focus {
   border-color: var(--accent);
 }
 
-.swatches {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 6px;
-  margin: 12px 0 4px;
+/* Palette dialog: it sits at the side so the canvas behind it shows the live preview. */
+.sheet-backdrop.side {
+  background: rgba(22, 21, 26, 0.12);
+  place-items: center end;
 }
 
-.swatches span {
-  height: 28px;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 0, 0, 0.08);
+.swatch-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 10px;
+  margin: 14px 0 6px;
+}
+
+.swatch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  cursor: pointer;
+  text-align: center;
+}
+
+.swatch-color {
+  position: relative;
+  width: 100%;
+  height: 46px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.4);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.swatch:hover .swatch-color,
+.swatch:focus-within .swatch-color {
+  transform: translateY(-1px);
+  box-shadow: 0 0 0 2px var(--accent);
+}
+
+/* The native picker covers the swatch, invisible: a click anywhere on it opens the picker. */
+.swatch-color input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: 0;
+  padding: 0;
+}
+
+.swatch-name {
+  font-size: 13px;
+  color: #3f3c47;
+}
+
+.swatch-hex {
+  font: 11px/1.2 ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  color: var(--muted);
+}
+
+.swatch.bad .swatch-color {
+  box-shadow: 0 0 0 2px #d4483b;
+}
+
+.swatch-warn {
+  font-size: 11px;
+  line-height: 1.2;
+  color: #c0392b;
+}
+
+.hex-field {
+  display: block;
+  margin-top: 8px;
+}
+
+.palette-format {
+  margin-top: 8px;
+}
+
+.palette-format summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.palette-format p {
+  margin: 6px 0 0;
+}
+
+.palette-actions {
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.palette-secondary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
 }
 
 .sheet-actions {
@@ -730,15 +1193,68 @@ textarea:focus {
     width: 100%;
   }
   .demo-caption {
-    margin: 28px 0 14px;
-    font-size: 16px;
+    margin-top: 14px;
+    font-size: 14px;
     text-align: center;
   }
   .demo-frame {
+    margin-top: 16px;
     border-radius: 18px;
+  }
+  .hero .prompt-field {
+    flex: none;
+  }
+  .chips {
+    justify-content: flex-start;
+    margin-top: 12px;
+    gap: 6px;
+  }
+  .chip {
+    font-size: 13px;
+    padding: 6px 11px;
+  }
+  /* Two chips on a phone, so the demo sits well within the first screen. */
+  .hero .chips .chip:nth-child(n + 3) {
+    display: none;
+  }
+  .hero {
+    padding-top: 12px;
+  }
+  .hero h1 {
+    font-size: 34px;
+    margin-bottom: 10px;
+  }
+  .hero .lead {
+    font-size: 16px;
+    margin-bottom: 16px;
+  }
+  .hero .prompt {
+    gap: 10px;
+  }
+  .hero .prompt input,
+  .hero .btn {
+    height: 50px;
+  }
+  /* The strip scrolls inside itself; the page never scrolls sideways. */
+  .strip-row {
+    display: flex;
+    overflow-x: auto;
+    gap: 6px;
+    margin: 0 -16px;
+    padding: 2px 16px 6px;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  .strip-row::-webkit-scrollbar {
+    display: none;
+  }
+  .strip-item {
+    flex: 0 0 76px;
+    scroll-snap-align: start;
   }
   .demo-link {
     align-self: center;
+    margin-top: 12px;
     font-size: 16px;
   }
 
@@ -856,9 +1372,25 @@ textarea:focus {
   .bottom-bar .btn {
     height: 54px;
   }
-  .sheet-backdrop {
+  .sheet-backdrop,
+  .sheet-backdrop.side {
     place-items: end stretch;
     padding: 0;
+  }
+  /* Lower sheet, so the recoloured canvas stays in view above it; «Применить» always visible. */
+  .sheet.palette-sheet {
+    max-height: 62vh;
+    padding-bottom: 0;
+  }
+  .palette-sheet .swatch-color {
+    height: 38px;
+  }
+  .palette-actions {
+    position: sticky;
+    bottom: 0;
+    background: var(--surface);
+    padding: 10px 0 14px;
+    margin-top: 10px;
   }
   .sheet {
     border-radius: 20px 20px 0 0;

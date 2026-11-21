@@ -8,6 +8,11 @@ export interface Interpretation {
   source: InterpretSource;
   /** Short, quiet explanation for the user (or empty). */
   note: string;
+  /** What went wrong, if anything, so the UI can offer the next step. */
+  problem?: 'limit' | 'timeout' | 'offline' | 'busy';
+  /** AI quota after this request (unknown when the server was not asked). */
+  aiLeft?: number;
+  aiLimit?: number;
 }
 
 export interface ServerAnswer {
@@ -39,11 +44,12 @@ export function formatResetTime(at: number, now = Date.now()): string {
 /** The note shown above the canvas for a server answer. */
 export function answerNote(a: ServerAnswer, now = Date.now()): string {
   const back = a.aiResetAt ? ` AI-запросы вернутся ${formatResetTime(a.aiResetAt, now)}.` : '';
-  if (a.limited) return `Лимит AI-запросов на сутки исчерпан — эту фразу разобрали по словарю.${back} Перечисление объектов работает без ограничений.`;
+  if (a.limited) return `Лимит AI-запросов на сутки исчерпан — эту фразу разобрали по словарю.${back} Перечисление объектов работает без ограничений — например:`;
+  if (a.timedOut) return 'AI не ответил вовремя — собрали по словарю. Попробуйте ещё раз или перечислите объекты.';
   if (a.source === 'dictionary') return a.note || 'Фразу разобрали по словарю';
   if (a.aiLeft === 0) return `Это был последний AI-запрос на сутки; дальше фразы разбираются по словарю.${back}`;
-  const limit = a.aiLimit ? ` из ${a.aiLimit}` : '';
-  return `Фразу разобрал AI. Осталось AI-запросов: ${a.aiLeft}${limit} на сутки`;
+  // The quota left is shown discreetly next to the input, not as a message.
+  return '';
 }
 
 /**
@@ -55,7 +61,7 @@ export function answerNote(a: ServerAnswer, now = Date.now()): string {
 export async function interpretPhrase(phrase: string, timeoutMs = CLIENT_TIMEOUT_MS): Promise<Interpretation> {
   const local = matchObjects(phrase);
   if (local.mode === 'objects') return { objects: local.objects, source: 'dictionary', note: '' };
-  const offline = (note: string): Interpretation => ({ objects: interpretByTags(phrase).objects, source: 'offline', note });
+  const offline = (note: string, problem: Interpretation['problem']): Interpretation => ({ objects: interpretByTags(phrase).objects, source: 'offline', note, problem });
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), timeoutMs);
   try {
@@ -66,14 +72,32 @@ export async function interpretPhrase(phrase: string, timeoutMs = CLIENT_TIMEOUT
       credentials: 'same-origin',
       signal: ctrl.signal,
     });
-    if (res.status === 429) return offline('Слишком много запросов подряд — собрали по словарю');
+    if (res.status === 429) return offline('Слишком много запросов подряд — собрали по словарю. Подождите минуту и попробуйте снова.', 'busy');
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const a = (await res.json()) as ServerAnswer;
-    return { objects: applyExplicitBackground(phrase, a.objects), source: a.source, note: answerNote(a) };
+    const problem = a.limited ? 'limit' : a.timedOut ? 'timeout' : undefined;
+    return { objects: applyExplicitBackground(phrase, a.objects), source: a.source, note: answerNote(a), problem, aiLeft: a.aiLeft, aiLimit: a.aiLimit };
   } catch {
-    if (ctrl.signal.aborted) return offline('Сервер не ответил вовремя — собрали по словарю');
-    return offline('Сервер недоступен — собрали по словарю');
+    if (ctrl.signal.aborted) return offline('Сервер не ответил вовремя — собрали по словарю. Попробуйте ещё раз чуть позже.', 'timeout');
+    return offline('Сервер недоступен — собрали по словарю. Проверьте интернет и попробуйте ещё раз.', 'offline');
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export interface AiStatus {
+  aiLeft: number;
+  aiLimit: number;
+  aiConfigured: boolean;
+}
+
+/** Quota for this browser; null when the server cannot be asked. */
+export async function fetchAiStatus(): Promise<AiStatus | null> {
+  try {
+    const res = await fetch('/api/status', { credentials: 'same-origin' });
+    if (!res.ok) return null;
+    return (await res.json()) as AiStatus;
+  } catch {
+    return null;
   }
 }

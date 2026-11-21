@@ -30,6 +30,12 @@ export interface Pt {
 export interface Fragment {
   /** Inner SVG markup (paths in original Figma coordinates); colours are `var(--role)` tokens. */
   markup: string;
+  /**
+   * S pieces only: L size ÷ S size of this object (2.0 for most; the S sheet is
+   * half size). The piece is drawn scaled by it, so every S piece has exactly
+   * the size of its L piece and a scene scale means the same for S and L.
+   */
+  detail?: number;
   /** Tight bounding box in source units. */
   x: number;
   y: number;

@@ -159,6 +159,8 @@ function main() {
   mkdirSync(OUT_GEN, { recursive: true });
   const report: string[] = [];
 
+  let decorL: LibraryData['decor'] = [];
+  const libs: Partial<Record<Size, LibraryData>> = {};
   for (const size of ['L', 'S'] as Size[]) {
     const sec = readSection(SOURCES[size], size);
     manifest.generatedFrom.push(`assets/source/size-${size}.svg`);
@@ -171,10 +173,10 @@ function main() {
       throw new Error('S and L palettes differ');
     }
     const lilac = inverse(schemes[0].colors);
-    const frameScale = sec.frames[0].size / 1000; // L swatch is 1000, S swatch is 500
-    const frames = Object.fromEntries(
-      Object.entries(FRAMES_L).map(([k, v]) => [k, { w: v.w * frameScale, h: v.h * frameScale }]),
-    ) as Record<Format, { w: number; h: number }>;
+    // S and L compositions have the same output size (one frame for both); only
+    // the level of detail differs. S fragments keep their own, half-size source
+    // units and carry a per-piece `detail` factor (see below).
+    const frames = { ...FRAMES_L } as Record<Format, { w: number; h: number }>;
     manifest.frames[size] = frames;
 
     const objects = {} as LibraryData['objects'];
@@ -217,14 +219,27 @@ function main() {
         if (!objects[id]?.[v]) throw new Error(`${size}: missing ${id}/${v}`);
       }
     }
-    const decor = extractDecor(sec, schemes);
-    const lib: LibraryData = { size, frames, objects, decor };
-    writeFileSync(join(OUT_GEN, `library-${size}.json`), JSON.stringify(lib));
+    // The background decoration is the same design in both swatches; S frames are
+    // full size now, so they use the full-size (L) decoration.
+    const decor = size === 'L' ? extractDecor(sec, schemes) : decorL;
+    if (size === 'L') decorL = decor;
+    libs[size] = { size, frames, objects, decor };
 
     report.push(`${size}: ${sec.objects.length} fragments, ${decor.reduce((n, d) => n + d.elements.length, 0)} decor elements`);
     for (const u of sec.unnamed) report.push(`  unnamed ${u.sourceName} → ${u.id} (${u.variant})`);
     if (sec.ignored.length) report.push(`  ignored groups: ${sec.ignored.join(', ')}`);
   }
+  // Per piece: L size ÷ S size, so each S piece is drawn at exactly its L
+  // piece's size (2.000 for most objects; the S coin and flower are drawn a
+  // little larger on the S sheet).
+  for (const id of OBJECT_IDS) {
+    for (const v of ['main', 'background'] as Variant[]) {
+      const l = libs.L!.objects[id][v], s = libs.S!.objects[id][v];
+      s.detail = round(l.w / s.w, 5);
+      if (Math.abs(s.detail - 2) > 0.005) report.push(`  S detail factor: ${id}/${v} = ${s.detail} (L ${round(l.w)}×${round(l.h)}, S ${round(s.w)}×${round(s.h)})`);
+    }
+  }
+  for (const size of ['L', 'S'] as Size[]) writeFileSync(join(OUT_GEN, `library-${size}.json`), JSON.stringify(libs[size]));
   manifest.entries.sort((a, b) => a.key.localeCompare(b.key));
   writeFileSync(join(OUT_GEN, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   console.log(report.join('\n'));

@@ -28,7 +28,7 @@ interface Placed {
 function place(scene: Scene, lib: LibraryData): Placed[] {
   return scene.items.map((item) => {
     const f = lib.objects[item.id][item.role];
-    const pl: Placement = { x: item.x, y: item.y, rotation: item.rotation, scale: scene.scale, w: f.w, h: f.h };
+    const pl: Placement = { x: item.x, y: item.y, rotation: item.rotation, scale: scene.scale * (f.detail ?? 1), w: f.w, h: f.h };
     const hull = orient(f.hull.map((p) => placePoint(p, pl)));
     const body = orient(f.body.map((p) => placePoint(p, pl)));
     return { item, hull, body, base: Math.max(...body.map((p) => p.y)) };
@@ -131,11 +131,14 @@ describe('depth-consistent layout', () => {
           // Object groups carry "translate(cx cy) scale(k) translate(..)"; decoration has no scale.
           const scales = [...svg.matchAll(/<g id="[^"]*" transform="translate\([^)]*\) scale\(([\d.]+)\)/g)].map((x) => Number(x[1]));
           expect(scales).toHaveLength(scene.items.length);
-          expect(new Set(scales).size).toBe(1);
-          // So drawn sizes keep the library proportions between any two objects.
+          // One scene scale; an S piece adds only its own detail factor, which draws it at its L size.
+          scene.items.forEach((it, k) => expect(scales[k]).toBeCloseTo(scene.scale * (lib.objects[it.id][it.role].detail ?? 1), 2));
+          // So drawn sizes keep the L library proportions between any two objects.
+          const L = loadLibrary('L');
           const [p, q] = scene.items;
           const fp = lib.objects[p.id][p.role], fq = lib.objects[q.id][q.role];
-          expect((fp.w * scales[0]) / (fq.w * scales[1])).toBeCloseTo(fp.w / fq.w, 6);
+          const lp = L.objects[p.id][p.role], lq = L.objects[q.id][q.role];
+          expect(Math.abs((fp.w * scales[0]) / (fq.w * scales[1]) / (lp.w / lq.w) - 1)).toBeLessThan(0.01);
         }
       }
     }

@@ -14,12 +14,17 @@ export function itemPalette(item: SceneItem, palette: Palette): Palette {
   return item.role === 'main' ? tintPalette(palette, item.tint) : palette;
 }
 
+/** Drawn scale of a piece: the scene scale, times the S piece's detail factor (S pieces are drawn at their L size). */
+export function pieceScale(f: Fragment, scale: number): number {
+  return scale * (f.detail ?? 1);
+}
+
 export function itemTransform(item: SceneItem, f: Fragment, scale: number): string {
   const cx = f.x + f.w / 2;
   const cy = f.y + f.h / 2;
   const parts = [`translate(${n(item.x)} ${n(item.y)})`];
   if (item.rotation) parts.push(`rotate(${n(item.rotation)})`);
-  parts.push(`scale(${n(scale)})`, `translate(${n(-cx)} ${n(-cy)})`);
+  parts.push(`scale(${n(pieceScale(f, scale))})`, `translate(${n(-cx)} ${n(-cy)})`);
   return parts.join(' ');
 }
 
