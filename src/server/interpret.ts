@@ -3,7 +3,7 @@
 
 import { applyExplicitBackground, interpretByTags, normalize } from '../shared/matcher';
 import type { ObjectRequest } from '../shared/types';
-import type { Provider, ProviderName } from './llm/providers';
+import { TruncatedAnswerError, type Provider, type ProviderName } from './llm/providers';
 
 export type Source = ProviderName | 'dictionary';
 
@@ -32,6 +32,8 @@ export interface InterpretResponse extends QuotaState {
 export interface QuotaOptions {
   perBrowser: number;
   perIp: number;
+  /** AI requests for the whole service (all visitors together) per window. */
+  global?: number;
   /** Rolling window for both counters, 24 hours by default. */
   windowMs?: number;
 }
@@ -44,6 +46,9 @@ export interface InterpreterOptions {
 }
 
 const DAY = 24 * 60 * 60 * 1000;
+/** Default ceiling for AI calls of the whole service per 24 hours. */
+export const DEFAULT_GLOBAL_LIMIT = 300;
+const GLOBAL_KEY = '*';
 /** A fallback provider is not started with less time left than this. */
 const MIN_ATTEMPT_MS = 1000;
 
@@ -129,6 +134,7 @@ export class Interpreter {
   private cache = new LruCache<{ objects: ObjectRequest[]; source: ProviderName }>(1000);
   private byBrowser: WindowCounter;
   private byIp: WindowCounter;
+  private global: WindowCounter;
   private deadlineMs: number;
   private now: () => number;
   private log: (msg: string) => void;
@@ -145,6 +151,7 @@ export class Interpreter {
     const windowMs = quota.windowMs ?? DAY;
     this.byBrowser = new WindowCounter(quota.perBrowser, windowMs, this.now);
     this.byIp = new WindowCounter(quota.perIp, windowMs, this.now);
+    this.global = new WindowCounter(quota.global ?? DEFAULT_GLOBAL_LIMIT, windowMs, this.now);
   }
 
   get aiConfigured(): boolean {
@@ -152,7 +159,7 @@ export class Interpreter {
   }
 
   aiLeft(browserId: string, ip: string): number {
-    return Math.min(this.byBrowser.left(browserId), this.byIp.left(ip));
+    return Math.min(this.byBrowser.left(browserId), this.byIp.left(ip), this.global.left(GLOBAL_KEY));
   }
 
   /** Requests left and, when none are, the moment the next one comes back. */
@@ -160,8 +167,8 @@ export class Interpreter {
     const aiLeft = this.aiLeft(browserId, ip);
     const out: QuotaState = { aiLeft, aiLimit: this.byBrowser.limit };
     if (aiLeft === 0) {
-      // Both counters must have a free slot again.
-      const at = [this.byBrowser.resetAt(browserId), this.byIp.resetAt(ip)].filter((x): x is number => x !== undefined);
+      // Every counter must have a free slot again.
+      const at = [this.byBrowser.resetAt(browserId), this.byIp.resetAt(ip), this.global.resetAt(GLOBAL_KEY)].filter((x): x is number => x !== undefined);
       if (at.length) out.aiResetAt = Math.max(...at);
     }
     return out;
@@ -194,6 +201,7 @@ export class Interpreter {
     // The quota counts attempts that reach a provider, successful or not.
     this.byBrowser.record(browserId);
     this.byIp.record(ip);
+    this.global.record(GLOBAL_KEY);
 
     const started = this.now();
     const ctrl = new AbortController();
@@ -206,6 +214,7 @@ export class Interpreter {
     });
     deadline.catch(() => {});
     let timedOut = false;
+    let truncated = false;
     try {
       for (const [k, p] of this.providers.entries()) {
         if (k > 0 && this.deadlineMs - (this.now() - started) < MIN_ATTEMPT_MS) {
@@ -224,6 +233,13 @@ export class Interpreter {
             timedOut = true;
             break;
           }
+          if (e instanceof TruncatedAnswerError) {
+            // The answer hit the token cap: a second provider would most likely
+            // do the same and double the cost, so the dictionary answers.
+            this.log(`[interpret] ${p.name}: ${e.message}`);
+            truncated = true;
+            break;
+          }
           this.log(`[interpret] ${p.name} failed: ${(e as Error).message}`);
         }
       }
@@ -231,6 +247,7 @@ export class Interpreter {
       clearTimeout(timer);
       ctrl.abort();
     }
+    if (truncated) return dictionary({ note: 'AI ответил слишком длинно — фразу разобрали по словарю' });
     if (timedOut) return dictionary({ timedOut: true, note: 'AI не ответил вовремя — фразу разобрали по словарю' });
     return dictionary({ note: 'AI недоступен — фразу разобрали по словарю' });
   }

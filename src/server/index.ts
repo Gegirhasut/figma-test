@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join, resolve } from 'node:path';
 import { guardApiRequest } from './guard';
-import { Interpreter, RateLimiter } from './interpret';
+import { DEFAULT_GLOBAL_LIMIT, Interpreter, RateLimiter } from './interpret';
 import { providerChain } from './llm/providers';
 import { serveStatic } from './static';
 
@@ -27,7 +27,7 @@ const COOKIE = 'skl_id';
 const providers = providerChain(env);
 const interpreter = new Interpreter(
   providers,
-  { perBrowser: Number(env.AI_LIMIT_PER_BROWSER) || 3, perIp: Number(env.AI_LIMIT_PER_IP) || 10 },
+  { perBrowser: Number(env.AI_LIMIT_PER_BROWSER) || 3, perIp: Number(env.AI_LIMIT_PER_IP) || 10, global: Number(env.AI_LIMIT_GLOBAL) || DEFAULT_GLOBAL_LIMIT },
   { deadlineMs: Number(env.LLM_DEADLINE_MS) || 12000, log: (m) => console.log(m) },
 );
 const limiter = new RateLimiter(Number(env.RATE_LIMIT_PER_MINUTE) || 30);

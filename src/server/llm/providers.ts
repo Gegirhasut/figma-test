@@ -39,6 +39,12 @@ export interface ProviderEnv {
   DEEPSEEK_PRICE_OUT?: string;
 }
 
+/** Output token cap: the answer is a short JSON list of at most 5 ids (~80 tokens). */
+export const MAX_OUTPUT_TOKENS = 150;
+
+/** The answer was cut at the token cap; the chain stops instead of paying for the fallback. */
+export class TruncatedAnswerError extends Error {}
+
 const price = (v: string | undefined, d: number) => (v && !Number.isNaN(Number(v)) ? Number(v) : d);
 
 export function anthropicProvider(env: ProviderEnv): Provider {
@@ -56,7 +62,7 @@ export function anthropicProvider(env: ProviderEnv): Provider {
       const t0 = Date.now();
       const response = await client.messages.create({
         model,
-        max_tokens: 1024,
+        max_tokens: MAX_OUTPUT_TOKENS,
         // A short classification: no extended thinking, lowest effort.
         thinking: { type: 'disabled' },
         output_config: {
@@ -68,6 +74,7 @@ export function anthropicProvider(env: ProviderEnv): Provider {
       }, { signal });
       const latencyMs = Date.now() - t0;
       if (response.stop_reason === 'refusal') throw new Error('anthropic: refusal');
+      if (response.stop_reason === 'max_tokens') throw new TruncatedAnswerError(`anthropic: answer cut at ${MAX_OUTPUT_TOKENS} tokens`);
       const text = response.content.map((b) => (b.type === 'text' ? b.text : '')).join('');
       const inputTokens = response.usage.input_tokens;
       const outputTokens = response.usage.output_tokens;
@@ -86,7 +93,7 @@ export function anthropicProvider(env: ProviderEnv): Provider {
 }
 
 interface DeepSeekResponse {
-  choices?: { message?: { content?: string } }[];
+  choices?: { message?: { content?: string }; finish_reason?: string }[];
   usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
@@ -112,7 +119,7 @@ export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fet
           ],
           response_format: { type: 'json_object' },
           temperature: 0,
-          max_tokens: 200,
+          max_tokens: MAX_OUTPUT_TOKENS,
           stream: false,
         }),
         signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeout)]) : AbortSignal.timeout(timeout),
@@ -120,6 +127,7 @@ export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fet
       if (!res.ok) throw new Error(`deepseek: HTTP ${res.status}`);
       const data = (await res.json()) as DeepSeekResponse;
       const latencyMs = Date.now() - t0;
+      if (data.choices?.[0]?.finish_reason === 'length') throw new TruncatedAnswerError(`deepseek: answer cut at ${MAX_OUTPUT_TOKENS} tokens`);
       const text = data.choices?.[0]?.message?.content ?? '';
       const inputTokens = data.usage?.prompt_tokens ?? 0;
       const outputTokens = data.usage?.completion_tokens ?? 0;
