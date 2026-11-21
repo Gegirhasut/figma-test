@@ -68,7 +68,7 @@ async function readBody(req: IncomingMessage, limit = 4096): Promise<string> {
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean> {
   if (!path.startsWith('/api/')) return false;
-  const rejected = guardApiRequest(req.method, req.headers);
+  const rejected = guardApiRequest(req.method, req.headers, { trustProxy: env.TRUST_PROXY === '1' });
   if (rejected) {
     sendJson(res, rejected.status, { error: rejected.error });
     return true;

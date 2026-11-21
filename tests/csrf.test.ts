@@ -30,6 +30,26 @@ describe('API guard against cross-site requests', () => {
     expect(guardApiRequest('POST', { host: HOST, ...json })).toBeNull();
   });
 
+  it('behind a proxy that rewrites Host to the backend address our own page still passes', () => {
+    const backend = { host: '127.0.0.1:8095', 'content-type': 'application/json', origin: `https://${HOST}` };
+    // Every current browser sends Sec-Fetch-Site, which does not depend on Host.
+    expect(guardApiRequest('POST', { ...backend, 'sec-fetch-site': 'same-origin' })).toBeNull();
+    expect(guardApiRequest('POST', { ...backend, 'sec-fetch-site': 'same-origin' }, { trustProxy: true })).toBeNull();
+    // Without Sec-Fetch-Site the trusted proxy's X-Forwarded-Host names the public host.
+    expect(guardApiRequest('POST', { ...backend, 'x-forwarded-host': HOST }, { trustProxy: true })).toBeNull();
+    // X-Forwarded-Host is only believed behind a trusted proxy.
+    expect(guardApiRequest('POST', { ...backend, 'x-forwarded-host': HOST })?.status).toBe(403);
+  });
+
+  it('behind the same proxy a foreign origin is still rejected', () => {
+    const backend = { host: '127.0.0.1:8095', 'content-type': 'application/json', 'x-forwarded-host': HOST };
+    expect(guardApiRequest('POST', { ...backend, origin: 'https://evil.example', 'sec-fetch-site': 'cross-site' }, { trustProxy: true })?.status).toBe(403);
+    expect(guardApiRequest('POST', { ...backend, origin: 'https://evil.example' }, { trustProxy: true })?.status).toBe(403);
+    expect(guardApiRequest('POST', { ...backend, origin: 'null', 'sec-fetch-site': 'same-origin' }, { trustProxy: true })?.status).toBe(403);
+    // The no-cors text/plain attack is stopped by the Content-Type whatever the headers say.
+    expect(guardApiRequest('POST', { ...backend, 'content-type': 'text/plain', origin: `https://${HOST}`, 'sec-fetch-site': 'same-origin' }, { trustProxy: true })?.status).toBe(415);
+  });
+
   it('GET stays open (status check, the page itself)', () => {
     expect(guardApiRequest('GET', { host: HOST, 'sec-fetch-site': 'cross-site' })).toBeNull();
     expect(isCrossSite({ host: HOST, 'sec-fetch-site': 'none' })).toBe(false);
