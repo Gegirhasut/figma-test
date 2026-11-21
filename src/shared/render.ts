@@ -61,8 +61,11 @@ function xmlId(s: string): string {
   return s.replace(/[\s()·]+/g, '_').replace(/_+$/, '').replace(/^(\d)/, '_$1');
 }
 
-function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+/** Characters XML 1.0 does not allow at all: C0 controls except tab/LF/CR, U+FFFE/U+FFFF, lone surrogates. */
+const XML_INVALID = /[\u0000-\u0008\u000B\u000C\u000E-\u001F￾￿]|[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
+export function esc(s: string): string {
+  return s.replace(XML_INVALID, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 /**

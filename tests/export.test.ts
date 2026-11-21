@@ -68,7 +68,7 @@ describe('SVG export', () => {
   });
 
   it('escapes the title', () => {
-    expect(svg).toContain('<title>тест &lt;&amp;></title>');
+    expect(svg).toContain('<title>тест &lt;&amp;&gt;</title>');
   });
 
   it('recolours through roles with a custom palette', () => {
