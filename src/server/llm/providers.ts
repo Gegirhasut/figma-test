@@ -39,8 +39,24 @@ export interface ProviderEnv {
   DEEPSEEK_PRICE_OUT?: string;
 }
 
-/** One provider call; the interpreter applies the same cap (LLM_TIMEOUT_MS) on its side. */
+/** One provider call (LLM_TIMEOUT_MS); the interpreter enforces it and moves on to the fallback. */
 export const DEFAULT_PROVIDER_TIMEOUT_MS = 7000;
+/**
+ * The SDK / fetch timeout is only a safety net for direct use of a provider
+ * (scripts): it fires this much later than the interpreter's own cut, so in
+ * the service a slow call always ends as a timeout of the interpreter.
+ */
+export const SDK_TIMEOUT_MARGIN_MS = 1500;
+
+export function sdkTimeoutMs(env: ProviderEnv): number {
+  return (Number(env.LLM_TIMEOUT_MS) || DEFAULT_PROVIDER_TIMEOUT_MS) + SDK_TIMEOUT_MARGIN_MS;
+}
+
+/** A provider error that means «took too long» (SDK or fetch timeout), not «failed». */
+export function isTimeoutError(e: unknown): boolean {
+  const SdkTimeout = (Anthropic as { APIConnectionTimeoutError?: new (...a: never[]) => Error }).APIConnectionTimeoutError;
+  return (typeof SdkTimeout === 'function' && e instanceof SdkTimeout) || (e instanceof Error && e.name === 'TimeoutError');
+}
 
 /** Output token cap: the answer is a short JSON list of at most 5 ids (~80 tokens). */
 export const MAX_OUTPUT_TOKENS = 150;
@@ -52,7 +68,7 @@ const price = (v: string | undefined, d: number) => (v && !Number.isNaN(Number(v
 
 export function anthropicProvider(env: ProviderEnv): Provider {
   const model = env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
-  const timeout = Number(env.LLM_TIMEOUT_MS) || DEFAULT_PROVIDER_TIMEOUT_MS;
+  const timeout = sdkTimeoutMs(env);
   let client: Anthropic | null = null;
   return {
     name: 'anthropic',
@@ -104,7 +120,7 @@ interface DeepSeekResponse {
 export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fetch): Provider {
   const model = env.DEEPSEEK_MODEL || 'deepseek-chat';
   const base = (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const timeout = Number(env.LLM_TIMEOUT_MS) || DEFAULT_PROVIDER_TIMEOUT_MS;
+  const timeout = sdkTimeoutMs(env);
   return {
     name: 'deepseek',
     model,

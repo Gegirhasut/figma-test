@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { DEFAULT_CALL_TIMEOUT_MS, DEFAULT_DEADLINE_MS, Interpreter, WindowCounter } from '../src/server/interpret';
-import { DEFAULT_PROVIDER_TIMEOUT_MS } from '../src/server/llm/providers';
+import Anthropic from '@anthropic-ai/sdk';
+import { DEFAULT_PROVIDER_TIMEOUT_MS, SDK_TIMEOUT_MARGIN_MS, isTimeoutError, sdkTimeoutMs } from '../src/server/llm/providers';
 import { deepseekProvider, type Provider, type ProviderResult } from '../src/server/llm/providers';
 
 function fake(name: 'anthropic' | 'deepseek', impl: () => Promise<Partial<ProviderResult>>): Provider & { calls: number; signals: (AbortSignal | undefined)[] } {
@@ -149,6 +150,47 @@ describe('one deadline for the whole provider chain', () => {
     expect(DEFAULT_DEADLINE_MS).toBe(12_000);
     expect(DEFAULT_CALL_TIMEOUT_MS).toBe(7_000);
     expect(DEFAULT_PROVIDER_TIMEOUT_MS).toBe(DEFAULT_CALL_TIMEOUT_MS);
+  });
+
+  it('the SDK timeout is later than the interpreter cut, so the interpreter always fires first', () => {
+    expect(SDK_TIMEOUT_MARGIN_MS).toBeGreaterThanOrEqual(1000);
+    expect(sdkTimeoutMs({})).toBe(DEFAULT_CALL_TIMEOUT_MS + SDK_TIMEOUT_MARGIN_MS);
+    expect(sdkTimeoutMs({ LLM_TIMEOUT_MS: '7000' })).toBe(8500);
+  });
+
+  it('DeepSeek gives fetch the later SDK timeout, not the interpreter one', async () => {
+    let signal: AbortSignal | undefined;
+    const fetchMock = (async (_u: string, init: RequestInit) => {
+      signal = init.signal ?? undefined;
+      return new Response(JSON.stringify({ choices: [{ message: { content: '{"objects":[{"id":"lamp","role":"main"}]}' } }] }));
+    }) as unknown as typeof fetch;
+    const timeoutSpy = vi.spyOn(AbortSignal, 'timeout');
+    await deepseekProvider({ DEEPSEEK_API_KEY: 'k', LLM_TIMEOUT_MS: '7000' }, fetchMock).interpret('идея');
+    expect(timeoutSpy).toHaveBeenCalledWith(8500);
+    expect(signal).toBeDefined();
+    timeoutSpy.mockRestore();
+  });
+
+  it('SDK and fetch timeouts are classified as timeouts', () => {
+    expect(isTimeoutError(new Anthropic.APIConnectionTimeoutError())).toBe(true);
+    expect(isTimeoutError(new DOMException('The operation timed out.', 'TimeoutError'))).toBe(true);
+    expect(isTimeoutError(new Error('HTTP 500'))).toBe(false);
+  });
+
+  it('if an SDK timeout still comes first, both providers timing out reads as «не ответил вовремя»', async () => {
+    const sdkTimeout = (name: 'anthropic' | 'deepseek') =>
+      fake(name, async () => {
+        await sleep(50);
+        throw name === 'anthropic' ? new Anthropic.APIConnectionTimeoutError() : new DOMException('The operation timed out.', 'TimeoutError');
+      });
+    const a = sdkTimeout('anthropic');
+    const d = sdkTimeout('deepseek');
+    const r = await new Interpreter([a, d], { perBrowser: 3, perIp: 10 }, { deadlineMs: 5000, callTimeoutMs: 3000 }).interpret('копим на отпуск', 'b', 'ip');
+    expect(d.calls).toBe(1);
+    expect(r.source).toBe('dictionary');
+    expect(r.timedOut).toBe(true);
+    expect(r.note).toMatch(/не ответил вовремя/);
+    expect(r.note).not.toMatch(/недоступен/);
     expect(DEFAULT_DEADLINE_MS - DEFAULT_CALL_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000);
   });
 

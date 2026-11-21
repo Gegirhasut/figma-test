@@ -3,7 +3,7 @@
 
 import { applyExplicitBackground, interpretByTags, normalize } from '../shared/matcher';
 import type { ObjectRequest } from '../shared/types';
-import { TruncatedAnswerError, type Provider, type ProviderName } from './llm/providers';
+import { TruncatedAnswerError, isTimeoutError, type Provider, type ProviderName } from './llm/providers';
 
 export type Source = ProviderName | 'dictionary';
 
@@ -263,9 +263,11 @@ export class Interpreter {
             truncated = true;
             break;
           }
-          if (e instanceof CallTimeoutError) {
+          if (e instanceof CallTimeoutError || isTimeoutError(e)) {
             // Not the end of the chain: the fallback gets what is left of the deadline.
-            this.log(`[interpret] ${p.name}: no answer in ${this.callTimeoutMs}ms`);
+            // An SDK/fetch timeout counts the same (it is set later, but a custom
+            // LLM_TIMEOUT_MS or a provider's own limit could still beat ours).
+            this.log(`[interpret] ${p.name}: no answer in ${e instanceof CallTimeoutError ? this.callTimeoutMs : (e as Error).message}${e instanceof CallTimeoutError ? 'ms' : ''}`);
             timedOut = true;
             continue;
           }
