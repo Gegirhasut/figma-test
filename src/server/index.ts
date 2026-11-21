@@ -8,6 +8,7 @@ import { randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
 import { join, resolve } from 'node:path';
+import { guardApiRequest } from './guard';
 import { Interpreter, RateLimiter } from './interpret';
 import { providerChain } from './llm/providers';
 import { serveStatic } from './static';
@@ -67,6 +68,11 @@ async function readBody(req: IncomingMessage, limit = 4096): Promise<string> {
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, path: string): Promise<boolean> {
   if (!path.startsWith('/api/')) return false;
+  const rejected = guardApiRequest(req.method, req.headers);
+  if (rejected) {
+    sendJson(res, rejected.status, { error: rejected.error });
+    return true;
+  }
   const ip = clientIp(req);
   if (!limiter.allow(ip)) {
     sendJson(res, 429, { error: 'Слишком много запросов, попробуйте через минуту' });
