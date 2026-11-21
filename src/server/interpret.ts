@@ -41,6 +41,11 @@ export interface QuotaOptions {
 export interface InterpreterOptions {
   /** One deadline for the whole provider chain; the fallback only gets what is left. */
   deadlineMs?: number;
+  /**
+   * Cap for one provider call, well below the deadline so that a hanging
+   * primary still leaves the fallback time to answer.
+   */
+  callTimeoutMs?: number;
   now?: () => number;
   log?: (msg: string) => void;
 }
@@ -51,6 +56,9 @@ export const DEFAULT_GLOBAL_LIMIT = 300;
 const GLOBAL_KEY = '*';
 /** A fallback provider is not started with less time left than this. */
 const MIN_ATTEMPT_MS = 1000;
+/** Defaults: 12 s for the whole chain, 7 s for one provider call. */
+export const DEFAULT_DEADLINE_MS = 12_000;
+export const DEFAULT_CALL_TIMEOUT_MS = 7_000;
 
 class LruCache<V> {
   private map = new Map<string, V>();
@@ -129,6 +137,7 @@ export class WindowCounter {
 }
 
 class DeadlineError extends Error {}
+class CallTimeoutError extends Error {}
 
 export class Interpreter {
   private cache = new LruCache<{ objects: ObjectRequest[]; source: ProviderName }>(1000);
@@ -136,6 +145,7 @@ export class Interpreter {
   private byIp: WindowCounter;
   private global: WindowCounter;
   private deadlineMs: number;
+  private callTimeoutMs: number;
   private now: () => number;
   private log: (msg: string) => void;
 
@@ -147,7 +157,8 @@ export class Interpreter {
   ) {
     this.now = opts.now ?? Date.now;
     this.log = opts.log ?? (() => {});
-    this.deadlineMs = opts.deadlineMs ?? 12_000;
+    this.deadlineMs = opts.deadlineMs ?? DEFAULT_DEADLINE_MS;
+    this.callTimeoutMs = opts.callTimeoutMs ?? DEFAULT_CALL_TIMEOUT_MS;
     const windowMs = quota.windowMs ?? DAY;
     this.byBrowser = new WindowCounter(quota.perBrowser, windowMs, this.now);
     this.byIp = new WindowCounter(quota.perIp, windowMs, this.now);
@@ -221,9 +232,21 @@ export class Interpreter {
           timedOut = true;
           break;
         }
+        // One call gets at most callTimeoutMs; the chain deadline still aborts it too.
+        const call = new AbortController();
+        const stopCall = () => call.abort();
+        ctrl.signal.addEventListener('abort', stopCall, { once: true });
+        let callTimer: ReturnType<typeof setTimeout> | undefined;
+        const callTimeout = new Promise<never>((_, reject) => {
+          callTimer = setTimeout(() => {
+            call.abort();
+            reject(new CallTimeoutError(`call timeout ${this.callTimeoutMs}ms`));
+          }, this.callTimeoutMs);
+        });
+        callTimeout.catch(() => {});
         try {
-          // A provider that ignores the signal still cannot hold the request past the deadline.
-          const r = await Promise.race([p.interpret(key, ctrl.signal), deadline]);
+          // A provider that ignores the signal still cannot hold the request past either limit.
+          const r = await Promise.race([p.interpret(key, call.signal), deadline, callTimeout]);
           this.log(`[interpret] ${p.name} ${r.latencyMs}ms in=${r.inputTokens} out=${r.outputTokens} → ${r.objects.map((o) => o.id).join(',')}`);
           this.cache.set(key, { objects: r.objects, source: p.name });
           return { objects: applyExplicitBackground(phrase, r.objects), source: p.name, cached: false, ...this.quota(browserId, ip) };
@@ -240,7 +263,17 @@ export class Interpreter {
             truncated = true;
             break;
           }
+          if (e instanceof CallTimeoutError) {
+            // Not the end of the chain: the fallback gets what is left of the deadline.
+            this.log(`[interpret] ${p.name}: no answer in ${this.callTimeoutMs}ms`);
+            timedOut = true;
+            continue;
+          }
           this.log(`[interpret] ${p.name} failed: ${(e as Error).message}`);
+        } finally {
+          clearTimeout(callTimer);
+          ctrl.signal.removeEventListener('abort', stopCall);
+          call.abort();
         }
       }
     } finally {

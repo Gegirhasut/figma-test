@@ -39,6 +39,9 @@ export interface ProviderEnv {
   DEEPSEEK_PRICE_OUT?: string;
 }
 
+/** One provider call; the interpreter applies the same cap (LLM_TIMEOUT_MS) on its side. */
+export const DEFAULT_PROVIDER_TIMEOUT_MS = 7000;
+
 /** Output token cap: the answer is a short JSON list of at most 5 ids (~80 tokens). */
 export const MAX_OUTPUT_TOKENS = 150;
 
@@ -49,7 +52,7 @@ const price = (v: string | undefined, d: number) => (v && !Number.isNaN(Number(v
 
 export function anthropicProvider(env: ProviderEnv): Provider {
   const model = env.ANTHROPIC_MODEL || 'claude-haiku-5-5';
-  const timeout = Number(env.LLM_TIMEOUT_MS) || 12000;
+  const timeout = Number(env.LLM_TIMEOUT_MS) || DEFAULT_PROVIDER_TIMEOUT_MS;
   let client: Anthropic | null = null;
   return {
     name: 'anthropic',
@@ -101,7 +104,7 @@ interface DeepSeekResponse {
 export function deepseekProvider(env: ProviderEnv, fetchImpl: typeof fetch = fetch): Provider {
   const model = env.DEEPSEEK_MODEL || 'deepseek-chat';
   const base = (env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
-  const timeout = Number(env.LLM_TIMEOUT_MS) || 12000;
+  const timeout = Number(env.LLM_TIMEOUT_MS) || DEFAULT_PROVIDER_TIMEOUT_MS;
   return {
     name: 'deepseek',
     model,
