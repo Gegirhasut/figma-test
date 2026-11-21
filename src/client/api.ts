@@ -10,7 +10,7 @@ export interface Interpretation {
   /** Short, quiet explanation for the user (or empty). */
   note: string;
   /** What went wrong, if anything, so the UI can offer the next step. */
-  problem?: 'limit' | 'timeout' | 'offline' | 'busy';
+  problem?: 'limit' | 'timeout' | 'offline' | 'busy' | 'rejected' | 'server';
   /** AI quota after this request (unknown when the server was not asked). */
   aiLeft?: number;
   aiLimit?: number;
@@ -94,7 +94,10 @@ export async function interpretPhrase(phrase: string, timeoutMs = CLIENT_TIMEOUT
       signal: ctrl.signal,
     });
     if (res.status === 429) return offline('Слишком много запросов подряд — собрали по словарю. Подождите минуту и попробуйте снова.', 'busy');
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    // The server answered but refused this request (API guard, malformed body):
+    // the connection is fine, so «check the internet» would be wrong.
+    if (res.status === 403 || res.status === 415 || res.status === 400) return offline('Сервер отклонил запрос — собрали по словарю. Обновите страницу и попробуйте ещё раз.', 'rejected');
+    if (!res.ok) return offline('Сервер сейчас не может разобрать фразу — собрали по словарю. Попробуйте ещё раз чуть позже.', 'server');
     const a = (await res.json()) as ServerAnswer;
     const objects = sanitizeServerObjects(a?.objects);
     if (!objects.length) return offline('Ответ сервера не подошёл — собрали по словарю.', 'offline');

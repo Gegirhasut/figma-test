@@ -48,6 +48,35 @@ describe('interpretPhrase', () => {
     expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
   });
 
+  it('403 and 415 from the API guard are a refusal, not a network problem', async () => {
+    for (const status of [403, 415]) {
+      globalThis.fetch = (async () => new Response(JSON.stringify({ error: 'x' }), { status })) as typeof fetch;
+      const r = await interpretPhrase('копим на отпуск');
+      expect(r.source).toBe('offline');
+      expect(r.problem).toBe('rejected');
+      expect(r.note).toMatch(/Сервер отклонил запрос/);
+      expect(r.note).not.toMatch(/интернет/);
+      expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
+    }
+  });
+
+  it('a server error is not called a network problem either', async () => {
+    globalThis.fetch = (async () => new Response('oops', { status: 500 })) as typeof fetch;
+    const r = await interpretPhrase('копим на отпуск');
+    expect(r.problem).toBe('server');
+    expect(r.note).not.toMatch(/интернет/);
+    expect(r.objects.map((o) => o.id)).toEqual(expect.arrayContaining(['wallet', 'coin']));
+  });
+
+  it('only an unreachable server asks to check the internet', async () => {
+    globalThis.fetch = (async () => {
+      throw new TypeError('Failed to fetch');
+    }) as typeof fetch;
+    const r = await interpretPhrase('копим на отпуск');
+    expect(r.problem).toBe('offline');
+    expect(r.note).toMatch(/Проверьте интернет/);
+  });
+
   it('a list of objects never goes to the server', async () => {
     globalThis.fetch = (async () => {
       throw new Error('should not be called');

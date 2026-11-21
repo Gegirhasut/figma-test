@@ -508,7 +508,7 @@ export default function App() {
       {note && (
         <div className="note-box">
           <p className="note">{note}</p>
-          {(problem === 'limit' || problem === 'timeout' || problem === 'offline') && chipRow(LIST_CHIPS, 'Списки объектов работают без ограничений')}
+          {(problem === 'limit' || problem === 'timeout' || problem === 'offline' || problem === 'rejected' || problem === 'server') && chipRow(LIST_CHIPS, 'Списки объектов работают без ограничений')}
         </div>
       )}
       <div className="editor-grid">
