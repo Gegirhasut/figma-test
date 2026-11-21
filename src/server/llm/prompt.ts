@@ -2,7 +2,7 @@
 // library ids and roles. It never sees or returns geometry.
 
 import { CATALOG, OBJECT_IDS, isObjectId } from '../../shared/catalog';
-import { assignRoles } from '../../shared/matcher';
+import { assignRoles, normalize } from '../../shared/matcher';
 import type { ObjectRequest } from '../../shared/types';
 
 export const SYSTEM_PROMPT = [
@@ -17,8 +17,12 @@ export const SYSTEM_PROMPT = [
   ...CATALOG.map((c) => `- ${c.id}: ${c.nameRu} (${c.synonyms.slice(0, 3).join(', ')}); смыслы: ${c.tags.slice(0, 12).join(', ')}`),
 ].join('\n');
 
+/**
+ * The phrase is normalized here too (idempotent): only letters, digits and
+ * single spaces reach the model, whoever calls the provider.
+ */
 export function userPrompt(phrase: string): string {
-  return `Фраза: «${phrase}»`;
+  return `Фраза: «${normalize(phrase)}»`;
 }
 
 /** JSON Schema of the answer (structured output for Anthropic, documentation for others). */

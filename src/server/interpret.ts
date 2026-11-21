@@ -173,6 +173,10 @@ export class Interpreter {
   }
 
   async interpret(phrase: string, browserId: string, ip: string): Promise<InterpretResponse> {
+    // The cache is shared by all visitors, so the model gets exactly the string
+    // the cache key is made of: lower-case letters, digits and single spaces —
+    // no line breaks, quotes or control characters that could smuggle extra
+    // instructions past a key that only looks like an innocent phrase.
     const key = normalize(phrase);
     const cached = this.cache.get(key);
     // The cache holds what the provider said; an explicit «на фоне» in this
@@ -184,6 +188,7 @@ export class Interpreter {
       return { objects: d.objects, source: 'dictionary', cached: false, ...this.quota(browserId, ip), note: d.reason, ...extra };
     };
     if (!this.providers.length) return dictionary({ aiUnavailable: true });
+    if (!key) return dictionary({});
     if (this.aiLeft(browserId, ip) <= 0) return dictionary({ limited: true });
 
     // The quota counts attempts that reach a provider, successful or not.
@@ -209,7 +214,7 @@ export class Interpreter {
         }
         try {
           // A provider that ignores the signal still cannot hold the request past the deadline.
-          const r = await Promise.race([p.interpret(phrase, ctrl.signal), deadline]);
+          const r = await Promise.race([p.interpret(key, ctrl.signal), deadline]);
           this.log(`[interpret] ${p.name} ${r.latencyMs}ms in=${r.inputTokens} out=${r.outputTokens} → ${r.objects.map((o) => o.id).join(',')}`);
           this.cache.set(key, { objects: r.objects, source: p.name });
           return { objects: applyExplicitBackground(phrase, r.objects), source: p.name, cached: false, ...this.quota(browserId, ip) };
